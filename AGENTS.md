@@ -26,6 +26,7 @@ git status
 - `openclaw/interaction-bridge/`: browser voice/text bridge and AITuber speech endpoint.
 - `aituber-kit/`: character UI and speech frontend.
 - `ha-character-bridge/`: WebSocket bridge used by `interaction-bridge` to send messages to AITuber Kit.
+- `voice-listener/`: local microphone wake-word listener that transcribes speech and sends text to `interaction-bridge`.
 
 ## Safety Rules
 
@@ -44,6 +45,7 @@ Known local secret files are ignored:
 openclaw/.env
 openclaw/ha-bridge/.env
 aituber-kit/.env
+voice-listener/.env
 ```
 
 Use `.env.example` files for documentation.
@@ -62,6 +64,13 @@ Start the WebSocket bridge:
 ```bash
 cd /Users/shin/work/V_agent/ha-character-bridge
 .venv/bin/python bridge_server.py
+```
+
+Start the local wake-word voice listener:
+
+```bash
+cd /Users/shin/work/V_agent/voice-listener
+.venv/bin/python voice_listener.py
 ```
 
 Start OpenClaw services:
@@ -122,6 +131,10 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - `ha-bridge` calls `interaction-bridge /speak` after a successful Home Assistant action. This makes speech reliable even when the OpenClaw model does not follow the skill instruction to call `/speak`.
 - `interaction-bridge` signs into OpenClaw as a paired device and requests operator scopes.
 - Docker services reach the host through `host.docker.internal`.
+- `voice-listener` uses `openwakeword` with `hey_jarvis` and OpenAI audio transcription. The current default STT model is `gpt-4o-transcribe`.
+- `voice-listener` must preserve unused audio samples between reads. Dropping the remainder from a larger microphone chunk corrupts recordings and hurts STT accuracy.
+- Failed or skipped voice recordings are saved to `/tmp/voice-listener-last.wav` when `LAST_WAV_PATH` is set.
+- `MIC_GAIN` is a digital gain applied in `audio_callback`; watch `peak` in logs to avoid clipping.
 
 ## Editing Guidance
 
@@ -135,6 +148,7 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
   - `speak`
   - `emotion`
 - If changing ports or URLs, update both `README.md` and this file.
+- If changing voice listener behavior or environment variables, update `voice-listener/.env.example` and `README.md`.
 - After changing Docker services, rebuild only the affected service when possible.
 
 ## Git Workflow

@@ -31,6 +31,7 @@
 │   └── interaction-bridge/
 ├── aituber-kit/
 ├── ha-character-bridge/
+├── voice-listener/
 ├── README.md
 └── AGENTS.md
 ```
@@ -64,6 +65,17 @@ http://localhost:3000
 ```text
 ws://127.0.0.1:8000/ws
 ```
+
+### voice-listener
+
+ローカルマイクで wake word を待ち受け、発話を STT して `interaction-bridge /send-text` へ送る Python クライアントです。
+
+現在の主な設定:
+
+- wake word: `hey_jarvis`
+- STT: `gpt-4o-transcribe`
+- 最後の録音デバッグ: `/tmp/voice-listener-last.wav`
+- マイクゲイン: `MIC_GAIN`
 
 ## サービスとURL
 
@@ -143,6 +155,51 @@ http://127.0.0.1:18089
 6. 操作成功後、`ha-bridge` が `/speak` を呼び出し
 7. AITuber Kit のキャラクターが結果を発話
 
+## 常時待受音声入力
+
+`voice-listener` を使うと、ブラウザ録音ボタンを押さずにローカルマイクで wake word 待受できます。
+
+初回セットアップ:
+
+```bash
+cd /Users/shin/work/V_agent/voice-listener
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+```
+
+`.env` に `OPENAI_API_KEY` を設定します。必要に応じて `MIC_DEVICE_INDEX` と `MIC_GAIN` を調整してください。
+
+起動:
+
+```bash
+cd /Users/shin/work/V_agent/voice-listener
+.venv/bin/python voice_listener.py
+```
+
+使い方:
+
+```text
+ヘイ ジャービス
+洗面所の電気をつけて
+```
+
+音声認識に失敗したときは、最後の録音を再生してマイク入力を確認できます。
+
+```bash
+afplay /tmp/voice-listener-last.wav
+```
+
+ログの目安:
+
+```text
+rms=0.015 以上: 比較的良好
+peak=0.7 未満: 音割れしにくい
+peak=1.0 付近: MIC_GAIN を下げる
+```
+
+STT 精度に影響するため、`get_audio_samples` は余った音声サンプルを捨てずに次回へ持ち越します。ここを壊すと録音が不自然になり、認識精度が大きく落ちます。
+
 ## 手動テスト
 
 OpenClaw にテキストを送る:
@@ -207,6 +264,7 @@ aituber-kit/.git.backup-before-monorepo/
 openclaw/.env
 openclaw/ha-bridge/.env
 aituber-kit/.env
+voice-listener/.env
 ```
 
 commit してよいのは `.env.example` のみです。
