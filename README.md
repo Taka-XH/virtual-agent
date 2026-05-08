@@ -1,13 +1,15 @@
 # V_agent
 
-Local monorepo for the home AI character setup.
+自宅AIキャラクター環境をまとめて管理するための monorepo です。
 
-This repository combines OpenClaw, AITuber Kit, a Home Assistant bridge, an interaction bridge, and a small WebSocket bridge so a browser voice input can control the home and make the AI character speak.
+このリポジトリには、OpenClaw、AITuber Kit、Home Assistant 連携ブリッジ、音声入力/発話用ブリッジ、AITuber Kit へメッセージを送る WebSocket ブリッジが入っています。
 
-## Overview
+目的は、ブラウザで録音した音声を OpenClaw に渡し、家電操作を行い、その結果を AITuber Kit のキャラクターに発話させることです。
+
+## 全体構成
 
 ```text
-Browser recording
+ブラウザ録音
   -> openclaw/interaction-bridge
   -> OpenClaw gateway
   -> openclaw/ha-bridge
@@ -18,7 +20,7 @@ Browser recording
   -> VOICEVOX
 ```
 
-## Directories
+## ディレクトリ構成
 
 ```text
 .
@@ -35,19 +37,19 @@ Browser recording
 
 ### openclaw
 
-Runs the OpenClaw gateway and local bridge services.
+OpenClaw gateway と、ローカル連携用の Docker サービスを動かします。
 
-Important local additions:
+主なローカル追加要素:
 
-- `openclaw/ha-bridge`: exposes approved Home Assistant actions.
-- `openclaw/interaction-bridge`: accepts browser audio/text, forwards text to OpenClaw, and sends speech events to AITuber Kit.
-- `openclaw/docker-compose.override.yml`: local Docker services and runtime settings.
+- `openclaw/ha-bridge`: 許可済みの Home Assistant 操作だけを公開するブリッジ
+- `openclaw/interaction-bridge`: ブラウザ音声/テキストを受け取り OpenClaw へ渡し、AITuber Kit へ発話イベントを送るブリッジ
+- `openclaw/docker-compose.override.yml`: ローカル用 Docker サービスと実行時設定
 
 ### aituber-kit
 
-The character UI. It receives external speech/linkage events and speaks through the configured voice engine.
+AIキャラクターの画面です。外部連携イベントを受け取り、設定された音声エンジンで発話します。
 
-Common URL:
+通常のURL:
 
 ```text
 http://localhost:3000
@@ -55,95 +57,95 @@ http://localhost:3000
 
 ### ha-character-bridge
 
-Small WebSocket bridge between `interaction-bridge` and AITuber Kit.
+`interaction-bridge` から AITuber Kit へメッセージを送るための小さな WebSocket ブリッジです。
 
-Common URL:
+通常のURL:
 
 ```text
 ws://127.0.0.1:8000/ws
 ```
 
-## Services And URLs
+## サービスとURL
 
-| Service | Host URL | Docker/internal URL |
+| サービス | ホスト側URL | Docker内部URL |
 | --- | --- | --- |
-| AITuber Kit | `http://localhost:3000` | n/a |
+| AITuber Kit | `http://localhost:3000` | なし |
 | OpenClaw gateway | `http://127.0.0.1:18789` | `http://openclaw-gateway:18789` |
 | ha-bridge | `http://127.0.0.1:18088` | `http://ha-bridge:8088` |
 | interaction-bridge | `http://127.0.0.1:18089` | `http://interaction-bridge:8090` |
 | ha-character-bridge | `ws://127.0.0.1:8000/ws` | `ws://host.docker.internal:8000/ws` |
 | VOICEVOX | `http://127.0.0.1:50021` | `http://host.docker.internal:50021` |
 
-## Start
+## 起動方法
 
-### 1. Start AITuber Kit
+### 1. AITuber Kit を起動
 
 ```bash
 cd /Users/shin/work/V_agent/aituber-kit
 npm run dev
 ```
 
-Open:
+ブラウザで開きます。
 
 ```text
 http://localhost:3000
 ```
 
-### 2. Start the character WebSocket bridge
+### 2. キャラクター用 WebSocket ブリッジを起動
 
 ```bash
 cd /Users/shin/work/V_agent/ha-character-bridge
 .venv/bin/python bridge_server.py
 ```
 
-### 3. Start VOICEVOX
+### 3. VOICEVOX を起動
 
-Use the native VOICEVOX app or another process that exposes:
+VOICEVOX アプリなどを起動し、以下でアクセスできる状態にします。
 
 ```text
 http://127.0.0.1:50021
 ```
 
-Docker services should access it through:
+Docker コンテナ内からは以下のURLでアクセスします。
 
 ```text
 http://host.docker.internal:50021
 ```
 
-### 4. Start OpenClaw services
+### 4. OpenClaw 関連サービスを起動
 
 ```bash
 cd /Users/shin/work/V_agent/openclaw
 docker compose up -d openclaw-gateway ha-bridge interaction-bridge
 ```
 
-Check status:
+状態確認:
 
 ```bash
 docker compose ps
 ```
 
-## Browser Voice Input
+## ブラウザ音声入力
 
-Open the interaction bridge page:
+interaction bridge のページを開きます。
 
 ```text
 http://127.0.0.1:18089
 ```
 
-Use the recording buttons. The flow is:
+録音ボタンを使うと、以下の流れで処理されます。
 
-1. Browser records audio.
-2. `interaction-bridge` transcribes it.
-3. The text is sent to OpenClaw.
-4. OpenClaw chooses an approved Home Assistant action through `ha-bridge`.
-5. `ha-bridge` calls Home Assistant.
-6. On success, `ha-bridge` calls `/speak`.
-7. AITuber Kit speaks the result.
+1. ブラウザで音声を録音
+2. `interaction-bridge` が音声を文字起こし
+3. 文字起こしされたテキストを OpenClaw に送信
+4. OpenClaw が `ha-bridge` 経由で許可済みの Home Assistant 操作を選択
+5. `ha-bridge` が Home Assistant を操作
+6. 操作成功後、`ha-bridge` が `/speak` を呼び出し
+7. AITuber Kit のキャラクターが結果を発話
 
-## Manual Tests
+## 手動テスト
 
-Send text to OpenClaw:
+OpenClaw にテキストを送る:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:18089/send-text \
@@ -151,7 +153,7 @@ curl -sS -X POST http://127.0.0.1:18089/send-text \
   -d '{"text":"洗面所の電気をつけて"}'
 ```
 
-Speak through AITuber Kit:
+AITuber Kit に直接発話させる:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:18089/speak \
@@ -159,47 +161,47 @@ curl -sS -X POST http://127.0.0.1:18089/speak \
   -d '{"text":"こんにちは。お家のAIキャラクターです。","emotion":"happy"}'
 ```
 
-Run an approved Home Assistant action:
+許可済みの Home Assistant 操作を実行する:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:18088/run/bathroom_light_on
 ```
 
-List approved actions:
+許可済みアクション一覧を見る:
 
 ```bash
 curl -sS http://127.0.0.1:18088/actions
 ```
 
-## Git Management
+## Git 管理
 
-This repository is managed as one monorepo from:
+このリポジトリは以下をルートとする monorepo として管理します。
 
 ```text
 /Users/shin/work/V_agent
 ```
 
-Use Git only from the monorepo root unless you have a specific reason.
+基本的に Git 操作は monorepo ルートで行います。
 
 ```bash
 cd /Users/shin/work/V_agent
 git status
 git add .
-git commit -m "Describe the change"
+git commit -m "変更内容"
 ```
 
-The original nested repositories were backed up and ignored:
+もともと `openclaw` と `aituber-kit` は別々の Git リポジトリでしたが、現在は monorepo に統合済みです。元の `.git` は以下に退避され、Git 管理からは除外されています。
 
 ```text
 openclaw/.git.backup-before-monorepo/
 aituber-kit/.git.backup-before-monorepo/
 ```
 
-## Secrets
+## 秘密情報
 
-Do not commit `.env` files.
+`.env` ファイルは commit しないでください。
 
-Ignored local files include:
+以下のローカル設定ファイルは `.gitignore` で除外されています。
 
 ```text
 openclaw/.env
@@ -207,10 +209,10 @@ openclaw/ha-bridge/.env
 aituber-kit/.env
 ```
 
-Commit `.env.example` files only.
+commit してよいのは `.env.example` のみです。
 
-## Notes
+## メモ
 
-- `openclaw/docker-compose.override.yml` pins `OPENCLAW_AGENT_RUNTIME=pi` so OpenClaw does not try to use an unavailable `codex` harness.
-- `ha-bridge` performs AITuber speech after a successful home action. This is more reliable than relying only on model instructions inside an OpenClaw skill.
-- `node_modules`, `.venv`, `.next`, logs, and old nested `.git` backups are ignored.
+- `openclaw/docker-compose.override.yml` では `OPENCLAW_AGENT_RUNTIME=pi` を設定しています。これは Docker 環境で利用できない `codex` harness を OpenClaw が選ばないようにするためです。
+- 家電操作後の発話は `ha-bridge` 側で行います。OpenClaw のモデルがスキル指示を読み飛ばしても、操作成功後に確実に AITuber Kit へ発話できます。
+- `node_modules`、`.venv`、`.next`、ログ、退避した古い `.git` は Git 管理対象外です。
