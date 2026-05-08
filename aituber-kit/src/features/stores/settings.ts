@@ -1,0 +1,1091 @@
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { exclusivityMiddleware } from './exclusionMiddleware'
+
+import { KoeiroParam, DEFAULT_PARAM } from '@/features/constants/koeiroParam'
+import {
+  MemoryConfig,
+  DEFAULT_MEMORY_CONFIG,
+} from '@/features/memory/memoryTypes'
+import {
+  IdleModeSettings,
+  DEFAULT_IDLE_CONFIG,
+  IdlePhrase,
+  createIdlePhrase,
+} from '@/features/idle/idleTypes'
+import {
+  KioskModeSettings,
+  DEFAULT_KIOSK_CONFIG,
+} from '@/features/kiosk/kioskTypes'
+import {
+  AIService,
+  AIVoice,
+  Language,
+  OpenAITTSVoice,
+  OpenAITTSModel,
+  RealtimeAPIModeContentType,
+  RealtimeAPIModeVoice,
+  RealtimeAPIModeAzureVoice,
+  AudioModeInputType,
+  SpeechRecognitionMode,
+  WhisperTranscriptionModel,
+  ReasoningEffort,
+} from '../constants/settings'
+import {
+  googleSearchGroundingModels,
+  defaultModels,
+} from '../constants/aiModels'
+import { migrateOpenAIModelName } from '@/utils/modelMigration'
+
+export type googleSearchGroundingModelKey =
+  (typeof googleSearchGroundingModels)[number]
+
+interface APIKeys {
+  openaiKey: string
+  anthropicKey: string
+  googleKey: string
+  azureKey: string
+  xaiKey: string
+  groqKey: string
+  difyKey: string
+  cohereKey: string
+  mistralaiKey: string
+  perplexityKey: string
+  fireworksKey: string
+  deepseekKey: string
+  openrouterKey: string
+  lmstudioKey: string
+  ollamaKey: string
+  koeiromapKey: string
+  youtubeApiKey: string
+  elevenlabsApiKey: string
+  cartesiaApiKey: string
+  azureEndpoint: string
+  azureTTSKey: string
+  azureTTSEndpoint: string
+  customApiUrl: string
+  customApiHeaders: string
+  customApiBody: string
+  customApiStream: boolean
+  includeSystemMessagesInCustomApi: boolean
+  customApiIncludeMimeType: boolean
+}
+
+interface Live2DSettings {
+  neutralEmotions: string[]
+  happyEmotions: string[]
+  sadEmotions: string[]
+  angryEmotions: string[]
+  relaxedEmotions: string[]
+  surprisedEmotions: string[]
+  idleMotionGroup: string
+  neutralMotionGroup: string
+  happyMotionGroup: string
+  sadMotionGroup: string
+  angryMotionGroup: string
+  relaxedMotionGroup: string
+  surprisedMotionGroup: string
+}
+
+interface ModelProvider extends Live2DSettings {
+  selectAIService: AIService
+  selectAIModel: string
+  localLlmUrl: string
+  selectVoice: AIVoice
+  koeiroParam: KoeiroParam
+  googleTtsType: string
+  voicevoxSpeaker: string
+  voicevoxSpeed: number
+  voicevoxPitch: number
+  voicevoxIntonation: number
+  voicevoxServerUrl: string
+  aivisSpeechSpeaker: string
+  aivisSpeechSpeed: number
+  aivisSpeechPitch: number
+  aivisSpeechIntonationScale: number
+  aivisSpeechServerUrl: string
+  aivisSpeechTempoDynamics: number
+  aivisSpeechPrePhonemeLength: number
+  aivisSpeechPostPhonemeLength: number
+  aivisCloudApiKey: string
+  aivisCloudModelUuid: string
+  aivisCloudStyleId: number
+  aivisCloudStyleName: string
+  aivisCloudUseStyleName: boolean
+  aivisCloudSpeed: number
+  aivisCloudPitch: number
+  aivisCloudIntonationScale: number
+  aivisCloudTempoDynamics: number
+  aivisCloudPrePhonemeLength: number
+  aivisCloudPostPhonemeLength: number
+  stylebertvits2ServerUrl: string
+  stylebertvits2ApiKey: string
+  stylebertvits2ModelId: string
+  stylebertvits2Style: string
+  stylebertvits2SdpRatio: number
+  stylebertvits2Length: number
+  gsviTtsServerUrl: string
+  gsviTtsModelId: string
+  gsviTtsBatchSize: number
+  gsviTtsSpeechRate: number
+  elevenlabsVoiceId: string
+  cartesiaVoiceId: string
+  openaiTTSVoice: OpenAITTSVoice
+  openaiTTSModel: OpenAITTSModel
+  openaiTTSSpeed: number
+}
+
+interface Integrations {
+  difyUrl: string
+  difyConversationId: string
+  youtubeMode: boolean
+  youtubeCommentSource: 'youtube-api' | 'onecomme'
+  youtubeLiveId: string
+  youtubePlaying: boolean
+  youtubeNextPageToken: string
+  youtubeContinuationCount: number
+  youtubeNoCommentCount: number
+  youtubeSleepMode: boolean
+  conversationContinuityMode: boolean
+  conversationContinuityNewTopicThreshold: number
+  conversationContinuitySleepThreshold: number
+  conversationContinuityPromptEvaluate: string
+  conversationContinuityPromptContinuation: string
+  conversationContinuityPromptSelectComment: string
+  conversationContinuityPromptNewTopic: string
+  conversationContinuityPromptSleep: string
+  onecommePort: number
+  youtubeCommentInterval: number
+}
+
+interface Character {
+  characterName: string
+  userDisplayName: string
+  characterPreset1: string
+  characterPreset2: string
+  characterPreset3: string
+  characterPreset4: string
+  characterPreset5: string
+  customPresetName1: string
+  customPresetName2: string
+  customPresetName3: string
+  customPresetName4: string
+  customPresetName5: string
+  selectedPresetIndex: number
+  showAssistantText: boolean
+  showCharacterName: boolean
+  systemPrompt: string
+  selectedVrmPath: string
+  selectedLive2DPath: string
+  fixedCharacterPosition: boolean
+  characterPosition: {
+    x: number
+    y: number
+    z: number
+    scale: number
+  }
+  characterRotation: {
+    x: number
+    y: number
+    z: number
+  }
+  lightingIntensity: number
+  poseAdjustMode: boolean
+  selectedPNGTuberPath: string
+  pngTuberSensitivity: number
+  pngTuberChromaKeyEnabled: boolean
+  pngTuberChromaKeyColor: string
+  pngTuberChromaKeyTolerance: number
+  pngTuberScale: number
+  pngTuberOffsetX: number
+  pngTuberOffsetY: number
+  poseConfigs: PoseConfigItem[]
+  thinkingPoseEnabled: boolean
+  thinkingPoseId: string
+}
+
+// Pose config item type
+export type PoseConfigItem =
+  | { id: string; json: string }
+  | { id: string; sequence: string[]; switchDuration: number }
+
+// Preset question type
+export interface PresetQuestion {
+  id: string
+  text: string
+  order: number
+}
+
+interface General {
+  selectLanguage: Language
+  changeEnglishToJapanese: boolean
+  includeTimestampInUserMessage: boolean
+  showControlPanel: boolean
+  showQuickMenu: boolean
+  externalLinkageMode: boolean
+  realtimeAPIMode: boolean
+  realtimeAPIModeContentType: RealtimeAPIModeContentType
+  realtimeAPIModeVoice: RealtimeAPIModeVoice | RealtimeAPIModeAzureVoice
+  audioMode: boolean
+  audioModeInputType: AudioModeInputType
+  audioModeVoice: OpenAITTSVoice
+  slideMode: boolean
+  messageReceiverEnabled: boolean
+  clientId: string
+  useSearchGrounding: boolean
+  dynamicRetrievalThreshold: number
+  maxPastMessages: number
+  useVideoAsBackground: boolean
+  temperature: number
+  maxTokens: number
+  reasoningMode: boolean
+  reasoningEffort: ReasoningEffort
+  reasoningTokenBudget: number
+  showThinkingText: boolean
+  noSpeechTimeout: number
+  showSilenceProgressBar: boolean
+  continuousMicListeningMode: boolean
+  presetQuestions: PresetQuestion[]
+  showPresetQuestions: boolean
+  speechRecognitionMode: SpeechRecognitionMode
+  whisperTranscriptionModel: WhisperTranscriptionModel
+  initialSpeechTimeout: number
+  chatLogWidth: number
+  imageDisplayPosition: 'input' | 'side' | 'icon'
+  multiModalMode: 'ai-decide' | 'always' | 'never'
+  multiModalAiDecisionPrompt: string
+  enableMultiModal: boolean
+  colorTheme: 'default' | 'cool' | 'mono' | 'ocean' | 'forest' | 'sunset'
+  customModel: boolean
+}
+
+interface ModelType {
+  modelType: 'vrm' | 'live2d' | 'pngtuber'
+}
+
+// Presence detection sensitivity type
+export type PresenceDetectionSensitivity = 'low' | 'medium' | 'high'
+
+interface PresenceDetectionSettings {
+  presenceDetectionEnabled: boolean
+  presenceGreetingPhrases: IdlePhrase[]
+  presenceDepartureTimeout: number
+  presenceCooldownTime: number
+  presenceDetectionSensitivity: PresenceDetectionSensitivity
+  presenceDetectionThreshold: number
+  presenceDebugMode: boolean
+  presenceDeparturePhrases: IdlePhrase[]
+  presenceClearChatOnDeparture: boolean
+  presenceSelectedCameraId: string // 空文字列の場合はデフォルトカメラを使用
+}
+
+export type SettingsState = APIKeys &
+  ModelProvider &
+  Integrations &
+  Character &
+  General &
+  ModelType &
+  MemoryConfig &
+  PresenceDetectionSettings &
+  IdleModeSettings &
+  KioskModeSettings
+
+// Function to get initial values from environment variables
+const getInitialValuesFromEnv = (): SettingsState => ({
+  // API Keys
+  openaiKey:
+    process.env.NEXT_PUBLIC_OPENAI_API_KEY ||
+    process.env.NEXT_PUBLIC_OPENAI_KEY ||
+    '',
+  anthropicKey: '',
+  googleKey: '',
+  azureKey:
+    process.env.NEXT_PUBLIC_AZURE_API_KEY ||
+    process.env.NEXT_PUBLIC_AZURE_KEY ||
+    '',
+  xaiKey: '',
+  groqKey: '',
+  cohereKey: '',
+  mistralaiKey: '',
+  perplexityKey: '',
+  fireworksKey: '',
+  difyKey: '',
+  deepseekKey: '',
+  openrouterKey: '',
+  lmstudioKey: '',
+  ollamaKey: '',
+  koeiromapKey: process.env.NEXT_PUBLIC_KOEIROMAP_KEY || '',
+  youtubeApiKey: process.env.NEXT_PUBLIC_YOUTUBE_API_KEY || '',
+  elevenlabsApiKey: '',
+  cartesiaApiKey: '',
+  azureEndpoint: process.env.NEXT_PUBLIC_AZURE_ENDPOINT || '',
+
+  // Model Provider
+  selectAIService:
+    (process.env.NEXT_PUBLIC_SELECT_AI_SERVICE as AIService) || 'openai',
+  selectAIModel: migrateOpenAIModelName(
+    process.env.NEXT_PUBLIC_SELECT_AI_MODEL ||
+      defaultModels[
+        (process.env.NEXT_PUBLIC_SELECT_AI_SERVICE as AIService) || 'openai'
+      ]
+  ),
+  localLlmUrl: process.env.NEXT_PUBLIC_LOCAL_LLM_URL || '',
+  selectVoice: (process.env.NEXT_PUBLIC_SELECT_VOICE as AIVoice) || 'voicevox',
+  koeiroParam: DEFAULT_PARAM,
+  googleTtsType: process.env.NEXT_PUBLIC_GOOGLE_TTS_TYPE || '',
+  voicevoxSpeaker: process.env.NEXT_PUBLIC_VOICEVOX_SPEAKER || '46',
+  voicevoxSpeed:
+    parseFloat(process.env.NEXT_PUBLIC_VOICEVOX_SPEED || '1.0') || 1.0,
+  voicevoxPitch:
+    parseFloat(process.env.NEXT_PUBLIC_VOICEVOX_PITCH || '0.0') || 0.0,
+  voicevoxIntonation:
+    parseFloat(process.env.NEXT_PUBLIC_VOICEVOX_INTONATION || '1.0') || 1.0,
+  voicevoxServerUrl: '',
+  aivisSpeechSpeaker:
+    process.env.NEXT_PUBLIC_AIVIS_SPEECH_SPEAKER || '888753760',
+  aivisSpeechSpeed:
+    parseFloat(process.env.NEXT_PUBLIC_AIVIS_SPEECH_SPEED || '1.0') || 1.0,
+  aivisSpeechPitch:
+    parseFloat(process.env.NEXT_PUBLIC_AIVIS_SPEECH_PITCH || '0.0') || 0.0,
+  aivisSpeechIntonationScale:
+    parseFloat(
+      process.env.NEXT_PUBLIC_AIVIS_SPEECH_INTONATION_SCALE || '1.0'
+    ) || 1.0,
+  aivisSpeechServerUrl: '',
+  aivisSpeechTempoDynamics:
+    parseFloat(process.env.NEXT_PUBLIC_AIVIS_SPEECH_TEMPO_DYNAMICS || '1.0') ||
+    1.0,
+  aivisSpeechPrePhonemeLength:
+    parseFloat(
+      process.env.NEXT_PUBLIC_AIVIS_SPEECH_PRE_PHONEME_LENGTH || '0.1'
+    ) || 0.1,
+  aivisSpeechPostPhonemeLength:
+    parseFloat(
+      process.env.NEXT_PUBLIC_AIVIS_SPEECH_POST_PHONEME_LENGTH || '0.1'
+    ) || 0.1,
+  aivisCloudApiKey: '',
+  aivisCloudModelUuid: process.env.NEXT_PUBLIC_AIVIS_CLOUD_MODEL_UUID || '',
+  aivisCloudStyleId:
+    parseInt(process.env.NEXT_PUBLIC_AIVIS_CLOUD_STYLE_ID || '0') || 0,
+  aivisCloudStyleName: process.env.NEXT_PUBLIC_AIVIS_CLOUD_STYLE_NAME || '',
+  aivisCloudUseStyleName:
+    process.env.NEXT_PUBLIC_AIVIS_CLOUD_USE_STYLE_NAME === 'true',
+  aivisCloudSpeed:
+    parseFloat(process.env.NEXT_PUBLIC_AIVIS_CLOUD_SPEED || '1.0') || 1.0,
+  aivisCloudPitch:
+    parseFloat(process.env.NEXT_PUBLIC_AIVIS_CLOUD_PITCH || '0.0') || 0.0,
+  aivisCloudIntonationScale:
+    parseFloat(process.env.NEXT_PUBLIC_AIVIS_CLOUD_INTONATION_SCALE || '1.0') ||
+    1.0,
+  aivisCloudTempoDynamics:
+    parseFloat(process.env.NEXT_PUBLIC_AIVIS_CLOUD_TEMPO_DYNAMICS || '1.0') ||
+    1.0,
+  aivisCloudPrePhonemeLength:
+    parseFloat(
+      process.env.NEXT_PUBLIC_AIVIS_CLOUD_PRE_PHONEME_LENGTH || '0.1'
+    ) || 0.1,
+  aivisCloudPostPhonemeLength:
+    parseFloat(
+      process.env.NEXT_PUBLIC_AIVIS_CLOUD_POST_PHONEME_LENGTH || '0.1'
+    ) || 0.1,
+  stylebertvits2ServerUrl: '',
+  stylebertvits2ModelId: process.env.NEXT_PUBLIC_STYLEBERTVITS2_MODEL_ID || '0',
+  stylebertvits2ApiKey: '',
+  stylebertvits2Style:
+    process.env.NEXT_PUBLIC_STYLEBERTVITS2_STYLE || 'Neutral',
+  stylebertvits2SdpRatio:
+    parseFloat(process.env.NEXT_PUBLIC_STYLEBERTVITS2_SDP_RATIO || '0.2') ||
+    0.2,
+  stylebertvits2Length:
+    parseFloat(process.env.NEXT_PUBLIC_STYLEBERTVITS2_LENGTH || '1.0') || 1.0,
+  gsviTtsServerUrl:
+    process.env.NEXT_PUBLIC_GSVI_TTS_URL || 'http://127.0.0.1:5000/tts',
+  gsviTtsModelId: process.env.NEXT_PUBLIC_GSVI_TTS_MODEL_ID || '0',
+  gsviTtsBatchSize:
+    parseInt(process.env.NEXT_PUBLIC_GSVI_TTS_BATCH_SIZE || '2') || 2,
+  gsviTtsSpeechRate:
+    parseFloat(process.env.NEXT_PUBLIC_GSVI_TTS_SPEECH_RATE || '1.0') || 1.0,
+  elevenlabsVoiceId: process.env.NEXT_PUBLIC_ELEVENLABS_VOICE_ID || '',
+  cartesiaVoiceId: process.env.NEXT_PUBLIC_CARTESIA_VOICE_ID || '',
+  openaiTTSVoice:
+    (process.env.NEXT_PUBLIC_OPENAI_TTS_VOICE as OpenAITTSVoice) || 'shimmer',
+  openaiTTSModel:
+    (process.env.NEXT_PUBLIC_OPENAI_TTS_MODEL as OpenAITTSModel) || 'tts-1',
+  openaiTTSSpeed:
+    parseFloat(process.env.NEXT_PUBLIC_OPENAI_TTS_SPEED || '1.0') || 1.0,
+  azureTTSKey: '',
+  azureTTSEndpoint: '',
+  customApiUrl: process.env.NEXT_PUBLIC_CUSTOM_API_URL || '',
+  customApiHeaders: process.env.NEXT_PUBLIC_CUSTOM_API_HEADERS || '{}',
+  customApiBody: process.env.NEXT_PUBLIC_CUSTOM_API_BODY || '{}',
+  customApiStream: true,
+  includeSystemMessagesInCustomApi:
+    process.env.NEXT_PUBLIC_INCLUDE_SYSTEM_MESSAGES_IN_CUSTOM_API !== 'false',
+  customApiIncludeMimeType:
+    process.env.NEXT_PUBLIC_CUSTOM_API_INCLUDE_MIME_TYPE !== 'false',
+
+  // Integrations
+  difyUrl: '',
+  difyConversationId: '',
+  youtubeMode: process.env.NEXT_PUBLIC_YOUTUBE_MODE === 'true' ? true : false,
+  youtubeCommentSource:
+    (process.env.NEXT_PUBLIC_YOUTUBE_COMMENT_SOURCE as
+      | 'youtube-api'
+      | 'onecomme') || 'youtube-api',
+  youtubeLiveId: process.env.NEXT_PUBLIC_YOUTUBE_LIVE_ID || '',
+  youtubePlaying: false,
+  youtubeNextPageToken: '',
+  youtubeContinuationCount: 0,
+  youtubeNoCommentCount: 0,
+  youtubeSleepMode: false,
+  conversationContinuityMode: false,
+  conversationContinuityNewTopicThreshold:
+    parseInt(
+      process.env.NEXT_PUBLIC_CONVERSATION_CONTINUITY_NEW_TOPIC_THRESHOLD || '3'
+    ) || 3,
+  conversationContinuitySleepThreshold:
+    parseInt(
+      process.env.NEXT_PUBLIC_CONVERSATION_CONTINUITY_SLEEP_THRESHOLD || '6'
+    ) || 6,
+  conversationContinuityPromptEvaluate:
+    process.env.NEXT_PUBLIC_CONVERSATION_CONTINUITY_PROMPT_EVALUATE || '',
+  conversationContinuityPromptContinuation:
+    process.env.NEXT_PUBLIC_CONVERSATION_CONTINUITY_PROMPT_CONTINUATION || '',
+  conversationContinuityPromptSelectComment:
+    process.env.NEXT_PUBLIC_CONVERSATION_CONTINUITY_PROMPT_SELECT_COMMENT || '',
+  conversationContinuityPromptNewTopic:
+    process.env.NEXT_PUBLIC_CONVERSATION_CONTINUITY_PROMPT_NEW_TOPIC || '',
+  conversationContinuityPromptSleep:
+    process.env.NEXT_PUBLIC_CONVERSATION_CONTINUITY_PROMPT_SLEEP || '',
+  onecommePort:
+    parseInt(process.env.NEXT_PUBLIC_ONECOMME_PORT || '11180') || 11180,
+  youtubeCommentInterval:
+    parseInt(process.env.NEXT_PUBLIC_YOUTUBE_COMMENT_INTERVAL || '10') || 10,
+
+  // Character
+  characterName: process.env.NEXT_PUBLIC_CHARACTER_NAME || 'CHARACTER',
+  userDisplayName: process.env.NEXT_PUBLIC_USER_DISPLAY_NAME || 'YOU',
+  characterPreset1: process.env.NEXT_PUBLIC_CHARACTER_PRESET1 || '',
+  characterPreset2: process.env.NEXT_PUBLIC_CHARACTER_PRESET2 || '',
+  characterPreset3: process.env.NEXT_PUBLIC_CHARACTER_PRESET3 || '',
+  characterPreset4: process.env.NEXT_PUBLIC_CHARACTER_PRESET4 || '',
+  characterPreset5: process.env.NEXT_PUBLIC_CHARACTER_PRESET5 || '',
+  customPresetName1: process.env.NEXT_PUBLIC_CUSTOM_PRESET_NAME1 || 'Preset 1',
+  customPresetName2: process.env.NEXT_PUBLIC_CUSTOM_PRESET_NAME2 || 'Preset 2',
+  customPresetName3: process.env.NEXT_PUBLIC_CUSTOM_PRESET_NAME3 || 'Preset 3',
+  customPresetName4: process.env.NEXT_PUBLIC_CUSTOM_PRESET_NAME4 || 'Preset 4',
+  customPresetName5: process.env.NEXT_PUBLIC_CUSTOM_PRESET_NAME5 || 'Preset 5',
+  selectedPresetIndex: 0,
+  showAssistantText:
+    process.env.NEXT_PUBLIC_SHOW_ASSISTANT_TEXT === 'true' ? true : false,
+  showCharacterName:
+    process.env.NEXT_PUBLIC_SHOW_CHARACTER_NAME === 'true' ? true : false,
+  systemPrompt:
+    process.env.NEXT_PUBLIC_SYSTEM_PROMPT ||
+    process.env.NEXT_PUBLIC_CHARACTER_PRESET1 ||
+    '',
+  selectedVrmPath:
+    process.env.NEXT_PUBLIC_SELECTED_VRM_PATH || '/vrm/nikechan_v1.vrm',
+  selectedLive2DPath:
+    process.env.NEXT_PUBLIC_SELECTED_LIVE2D_PATH ||
+    '/live2d/nike01/nike01.model3.json',
+  fixedCharacterPosition:
+    process.env.NEXT_PUBLIC_FIXED_CHARACTER_POSITION === 'true',
+  characterPosition: (() => {
+    const val = process.env.NEXT_PUBLIC_CHARACTER_POSITION || ''
+    const parts = val.split(',')
+    return parts.length >= 4
+      ? {
+          x: parseFloat(parts[0]) || 0,
+          y: parseFloat(parts[1]) || 0,
+          z: parseFloat(parts[2]) || 0,
+          scale: Number.isFinite(parseFloat(parts[3]))
+            ? parseFloat(parts[3])
+            : 1,
+        }
+      : { x: 0, y: 0, z: 0, scale: 1 }
+  })(),
+  characterRotation: (() => {
+    const val = process.env.NEXT_PUBLIC_CHARACTER_ROTATION || ''
+    const parts = val.split(',')
+    return parts.length >= 3
+      ? {
+          x: parseFloat(parts[0]) || 0,
+          y: parseFloat(parts[1]) || 0,
+          z: parseFloat(parts[2]) || 0,
+        }
+      : { x: 0, y: 0, z: 0 }
+  })(),
+  lightingIntensity:
+    parseFloat(process.env.NEXT_PUBLIC_LIGHTING_INTENSITY || '1.0') || 1.0,
+  poseAdjustMode: false,
+
+  // General
+  selectLanguage: (process.env.NEXT_PUBLIC_SELECT_LANGUAGE as Language) || 'ja',
+  changeEnglishToJapanese:
+    process.env.NEXT_PUBLIC_CHANGE_ENGLISH_TO_JAPANESE === 'true',
+  includeTimestampInUserMessage:
+    process.env.NEXT_PUBLIC_INCLUDE_TIMESTAMP_IN_USER_MESSAGE === 'true',
+  showControlPanel: process.env.NEXT_PUBLIC_SHOW_CONTROL_PANEL !== 'false',
+  showQuickMenu: process.env.NEXT_PUBLIC_SHOW_QUICK_MENU === 'true',
+  externalLinkageMode: process.env.NEXT_PUBLIC_EXTERNAL_LINKAGE_MODE === 'true',
+  realtimeAPIMode:
+    process.env.NEXT_PUBLIC_REALTIME_API_MODE === 'true' &&
+    ['openai', 'azure'].includes(
+      process.env.NEXT_PUBLIC_SELECT_AI_SERVICE as AIService
+    ),
+  realtimeAPIModeContentType:
+    (process.env
+      .NEXT_PUBLIC_REALTIME_API_MODE_CONTENT_TYPE as RealtimeAPIModeContentType) ||
+    'input_text',
+  realtimeAPIModeVoice:
+    (process.env.NEXT_PUBLIC_REALTIME_API_MODE_VOICE as RealtimeAPIModeVoice) ||
+    'shimmer',
+  audioMode: process.env.NEXT_PUBLIC_AUDIO_MODE === 'true',
+  audioModeInputType:
+    (process.env.NEXT_PUBLIC_AUDIO_MODE_INPUT_TYPE as AudioModeInputType) ||
+    'input_text',
+  audioModeVoice:
+    (process.env.NEXT_PUBLIC_AUDIO_MODE_VOICE as OpenAITTSVoice) || 'shimmer',
+  slideMode: process.env.NEXT_PUBLIC_SLIDE_MODE === 'true',
+  messageReceiverEnabled:
+    process.env.NEXT_PUBLIC_MESSAGE_RECEIVER_ENABLED === 'true',
+  clientId: process.env.NEXT_PUBLIC_CLIENT_ID || '',
+  useSearchGrounding: process.env.NEXT_PUBLIC_USE_SEARCH_GROUNDING === 'true',
+  dynamicRetrievalThreshold:
+    parseFloat(process.env.NEXT_PUBLIC_DYNAMIC_RETRIEVAL_THRESHOLD || '0.3') ||
+    0.3,
+  maxPastMessages:
+    parseInt(process.env.NEXT_PUBLIC_MAX_PAST_MESSAGES || '10') || 10,
+  useVideoAsBackground:
+    process.env.NEXT_PUBLIC_USE_VIDEO_AS_BACKGROUND === 'true',
+  temperature: parseFloat(process.env.NEXT_PUBLIC_TEMPERATURE || '1.0') || 1.0,
+  maxTokens: parseInt(process.env.NEXT_PUBLIC_MAX_TOKENS || '4096') || 4096,
+  reasoningMode: process.env.NEXT_PUBLIC_REASONING_MODE === 'true',
+  reasoningEffort:
+    (process.env.NEXT_PUBLIC_REASONING_EFFORT as ReasoningEffort) || 'medium',
+  reasoningTokenBudget:
+    parseInt(process.env.NEXT_PUBLIC_REASONING_TOKEN_BUDGET || '8192') || 8192,
+  showThinkingText: process.env.NEXT_PUBLIC_SHOW_THINKING_TEXT === 'true',
+  noSpeechTimeout:
+    parseFloat(process.env.NEXT_PUBLIC_NO_SPEECH_TIMEOUT || '5.0') || 5.0,
+  showSilenceProgressBar:
+    process.env.NEXT_PUBLIC_SHOW_SILENCE_PROGRESS_BAR === 'true',
+  continuousMicListeningMode:
+    process.env.NEXT_PUBLIC_CONTINUOUS_MIC_LISTENING_MODE === 'true',
+  presetQuestions: (
+    process.env.NEXT_PUBLIC_PRESET_QUESTIONS?.split(',') || []
+  ).map((text, index) => ({
+    id: `preset-question-${index}`,
+    text: text.trim(),
+    order: index,
+  })),
+  showPresetQuestions:
+    process.env.NEXT_PUBLIC_SHOW_PRESET_QUESTIONS !== 'false',
+  speechRecognitionMode:
+    (process.env
+      .NEXT_PUBLIC_SPEECH_RECOGNITION_MODE as SpeechRecognitionMode) ||
+    'browser',
+  whisperTranscriptionModel:
+    (process.env
+      .NEXT_PUBLIC_WHISPER_TRANSCRIPTION_MODEL as WhisperTranscriptionModel) ||
+    'whisper-1',
+  initialSpeechTimeout:
+    parseFloat(process.env.NEXT_PUBLIC_INITIAL_SPEECH_TIMEOUT || '5.0') || 5.0,
+  chatLogWidth:
+    parseFloat(process.env.NEXT_PUBLIC_CHAT_LOG_WIDTH || '400') || 400,
+  imageDisplayPosition: (() => {
+    const validPositions = ['input', 'side', 'icon'] as const
+    const envPosition = process.env.NEXT_PUBLIC_IMAGE_DISPLAY_POSITION
+    return validPositions.includes(envPosition as any)
+      ? (envPosition as 'input' | 'side' | 'icon')
+      : 'input'
+  })(),
+  multiModalMode: (() => {
+    const validModes = ['ai-decide', 'always', 'never'] as const
+    const envMode = process.env.NEXT_PUBLIC_MULTIMODAL_MODE
+    return validModes.includes(envMode as any)
+      ? (envMode as 'ai-decide' | 'always' | 'never')
+      : 'ai-decide'
+  })(),
+  multiModalAiDecisionPrompt:
+    process.env.NEXT_PUBLIC_MULTIMODAL_AI_DECISION_PROMPT || '',
+  enableMultiModal: process.env.NEXT_PUBLIC_ENABLE_MULTIMODAL !== 'false',
+  colorTheme:
+    (process.env.NEXT_PUBLIC_COLOR_THEME as
+      | 'default'
+      | 'cool'
+      | 'mono'
+      | 'ocean'
+      | 'forest'
+      | 'sunset') || 'default',
+
+  // Custom model toggle
+  customModel: process.env.NEXT_PUBLIC_CUSTOM_MODEL === 'true',
+
+  // Settings
+  modelType:
+    (process.env.NEXT_PUBLIC_MODEL_TYPE as
+      | 'vrm'
+      | 'live2d'
+      | 'pngtuber'
+      | undefined) || 'vrm',
+  selectedPNGTuberPath:
+    process.env.NEXT_PUBLIC_SELECTED_PNGTUBER_PATH || '/pngtuber/nike01',
+  pngTuberSensitivity:
+    parseInt(process.env.NEXT_PUBLIC_PNGTUBER_SENSITIVITY || '50', 10) || 50,
+  pngTuberChromaKeyEnabled:
+    process.env.NEXT_PUBLIC_PNGTUBER_CHROMA_KEY_ENABLED === 'true',
+  pngTuberChromaKeyColor:
+    process.env.NEXT_PUBLIC_PNGTUBER_CHROMA_KEY_COLOR || '#00FF00',
+  pngTuberChromaKeyTolerance:
+    parseInt(
+      process.env.NEXT_PUBLIC_PNGTUBER_CHROMA_KEY_TOLERANCE || '50',
+      10
+    ) || 50,
+  pngTuberScale:
+    parseFloat(process.env.NEXT_PUBLIC_PNGTUBER_SCALE || '1.0') || 1.0,
+  pngTuberOffsetX:
+    parseFloat(process.env.NEXT_PUBLIC_PNGTUBER_OFFSET_X || '0') || 0,
+  pngTuberOffsetY:
+    parseFloat(process.env.NEXT_PUBLIC_PNGTUBER_OFFSET_Y || '0') || 0,
+  poseConfigs: [
+    { id: 'think', json: '/poses/think.json' },
+    { id: 'cheer', json: '/poses/cheer.json' },
+    { id: 'cross', json: '/poses/cross.json' },
+    { id: 'mouth_cover', json: '/poses/mouth_cover.json' },
+    { id: 'crossed_arms', json: '/poses/crossed_arms.json' },
+    { id: 'bow', json: '/poses/bow.json' },
+    { id: 'shrug', json: '/poses/shrug.json' },
+    { id: 'shy', json: '/poses/shy.json' },
+    {
+      id: 'wave',
+      sequence: ['/poses/wave1.json', '/poses/wave2.json'],
+      switchDuration: 0.5,
+    },
+    {
+      id: 'clap',
+      sequence: ['/poses/clap1.json', '/poses/clap2.json'],
+      switchDuration: 0.2,
+    },
+  ],
+  thinkingPoseEnabled:
+    process.env.NEXT_PUBLIC_THINKING_POSE_ENABLED === 'true' || false,
+  thinkingPoseId: process.env.NEXT_PUBLIC_THINKING_POSE_ID || 'think',
+
+  // Memory settings
+  memoryEnabled:
+    process.env.NEXT_PUBLIC_MEMORY_ENABLED === 'true' ||
+    DEFAULT_MEMORY_CONFIG.memoryEnabled,
+  memorySimilarityThreshold:
+    parseFloat(process.env.NEXT_PUBLIC_MEMORY_SIMILARITY_THRESHOLD || '') ||
+    DEFAULT_MEMORY_CONFIG.memorySimilarityThreshold,
+  memorySearchLimit:
+    parseInt(process.env.NEXT_PUBLIC_MEMORY_SEARCH_LIMIT || '') ||
+    DEFAULT_MEMORY_CONFIG.memorySearchLimit,
+  memoryMaxContextTokens:
+    parseInt(process.env.NEXT_PUBLIC_MEMORY_MAX_CONTEXT_TOKENS || '') ||
+    DEFAULT_MEMORY_CONFIG.memoryMaxContextTokens,
+
+  // Presence detection settings
+  presenceDetectionEnabled:
+    process.env.NEXT_PUBLIC_PRESENCE_DETECTION_ENABLED === 'true',
+  presenceGreetingPhrases: (() => {
+    const msg =
+      process.env.NEXT_PUBLIC_PRESENCE_GREETING_MESSAGE ||
+      'いらっしゃいませ！何かお手伝いできることはありますか？'
+    return [createIdlePhrase(msg, 'happy', 0)]
+  })(),
+  presenceDepartureTimeout:
+    parseInt(process.env.NEXT_PUBLIC_PRESENCE_DEPARTURE_TIMEOUT || '') || 7,
+  presenceCooldownTime:
+    parseInt(process.env.NEXT_PUBLIC_PRESENCE_COOLDOWN_TIME || '') || 5,
+  presenceDetectionSensitivity:
+    (process.env
+      .NEXT_PUBLIC_PRESENCE_DETECTION_SENSITIVITY as PresenceDetectionSensitivity) ||
+    'medium',
+  presenceDetectionThreshold:
+    parseFloat(process.env.NEXT_PUBLIC_PRESENCE_DETECTION_THRESHOLD || '') || 0,
+  presenceDebugMode: process.env.NEXT_PUBLIC_PRESENCE_DEBUG_MODE === 'true',
+  presenceDeparturePhrases: (() => {
+    const msg = process.env.NEXT_PUBLIC_PRESENCE_DEPARTURE_MESSAGE || ''
+    return msg ? [createIdlePhrase(msg, 'neutral', 0)] : []
+  })(),
+  presenceClearChatOnDeparture:
+    process.env.NEXT_PUBLIC_PRESENCE_CLEAR_CHAT_ON_DEPARTURE !== 'false',
+  presenceSelectedCameraId:
+    process.env.NEXT_PUBLIC_PRESENCE_SELECTED_CAMERA_ID || '',
+
+  // Idle mode settings
+  idleModeEnabled:
+    process.env.NEXT_PUBLIC_IDLE_MODE_ENABLED === 'true' ||
+    DEFAULT_IDLE_CONFIG.idleModeEnabled,
+  idlePhrases: DEFAULT_IDLE_CONFIG.idlePhrases,
+  idlePlaybackMode:
+    (process.env.NEXT_PUBLIC_IDLE_PLAYBACK_MODE as 'sequential' | 'random') ||
+    DEFAULT_IDLE_CONFIG.idlePlaybackMode,
+  idleInterval:
+    parseInt(process.env.NEXT_PUBLIC_IDLE_INTERVAL || '') ||
+    DEFAULT_IDLE_CONFIG.idleInterval,
+  idleDefaultEmotion:
+    (process.env.NEXT_PUBLIC_IDLE_DEFAULT_EMOTION as
+      | 'neutral'
+      | 'happy'
+      | 'sad'
+      | 'angry'
+      | 'relaxed'
+      | 'surprised') || DEFAULT_IDLE_CONFIG.idleDefaultEmotion,
+  idleTimePeriodEnabled:
+    process.env.NEXT_PUBLIC_IDLE_TIME_PERIOD_ENABLED === 'true' ||
+    DEFAULT_IDLE_CONFIG.idleTimePeriodEnabled,
+  idleTimePeriodMorning:
+    process.env.NEXT_PUBLIC_IDLE_TIME_PERIOD_MORNING ||
+    DEFAULT_IDLE_CONFIG.idleTimePeriodMorning,
+  idleTimePeriodMorningEmotion:
+    DEFAULT_IDLE_CONFIG.idleTimePeriodMorningEmotion,
+  idleTimePeriodAfternoon:
+    process.env.NEXT_PUBLIC_IDLE_TIME_PERIOD_AFTERNOON ||
+    DEFAULT_IDLE_CONFIG.idleTimePeriodAfternoon,
+  idleTimePeriodAfternoonEmotion:
+    DEFAULT_IDLE_CONFIG.idleTimePeriodAfternoonEmotion,
+  idleTimePeriodEvening:
+    process.env.NEXT_PUBLIC_IDLE_TIME_PERIOD_EVENING ||
+    DEFAULT_IDLE_CONFIG.idleTimePeriodEvening,
+  idleTimePeriodEveningEmotion:
+    DEFAULT_IDLE_CONFIG.idleTimePeriodEveningEmotion,
+  idleAiGenerationEnabled:
+    process.env.NEXT_PUBLIC_IDLE_AI_GENERATION_ENABLED === 'true' ||
+    DEFAULT_IDLE_CONFIG.idleAiGenerationEnabled,
+  idleAiPromptTemplate: process.env.NEXT_PUBLIC_IDLE_AI_PROMPT_TEMPLATE || '',
+
+  // Kiosk mode settings
+  kioskModeEnabled:
+    process.env.NEXT_PUBLIC_KIOSK_MODE_ENABLED === 'true' ||
+    DEFAULT_KIOSK_CONFIG.kioskModeEnabled,
+  kioskPasscode:
+    process.env.NEXT_PUBLIC_KIOSK_PASSCODE ||
+    DEFAULT_KIOSK_CONFIG.kioskPasscode,
+  kioskMaxInputLength:
+    parseInt(process.env.NEXT_PUBLIC_KIOSK_MAX_INPUT_LENGTH || '') ||
+    DEFAULT_KIOSK_CONFIG.kioskMaxInputLength,
+  kioskNgWords: process.env.NEXT_PUBLIC_KIOSK_NG_WORDS
+    ? process.env.NEXT_PUBLIC_KIOSK_NG_WORDS.split(',').map((w) => w.trim())
+    : DEFAULT_KIOSK_CONFIG.kioskNgWords,
+  kioskNgWordEnabled:
+    process.env.NEXT_PUBLIC_KIOSK_NG_WORD_ENABLED === 'true' ||
+    DEFAULT_KIOSK_CONFIG.kioskNgWordEnabled,
+  kioskGuidanceMessage:
+    process.env.NEXT_PUBLIC_KIOSK_GUIDANCE_MESSAGE ||
+    DEFAULT_KIOSK_CONFIG.kioskGuidanceMessage,
+  kioskGuidanceTimeout:
+    parseInt(process.env.NEXT_PUBLIC_KIOSK_GUIDANCE_TIMEOUT || '') ||
+    DEFAULT_KIOSK_CONFIG.kioskGuidanceTimeout,
+  kioskTemporaryUnlock: DEFAULT_KIOSK_CONFIG.kioskTemporaryUnlock,
+
+  // Live2D settings
+  neutralEmotions: process.env.NEXT_PUBLIC_NEUTRAL_EMOTIONS?.split(',') || [],
+  happyEmotions: process.env.NEXT_PUBLIC_HAPPY_EMOTIONS?.split(',') || [],
+  sadEmotions: process.env.NEXT_PUBLIC_SAD_EMOTIONS?.split(',') || [],
+  angryEmotions: process.env.NEXT_PUBLIC_ANGRY_EMOTIONS?.split(',') || [],
+  relaxedEmotions: process.env.NEXT_PUBLIC_RELAXED_EMOTIONS?.split(',') || [],
+  surprisedEmotions:
+    process.env.NEXT_PUBLIC_SURPRISED_EMOTIONS?.split(',') || [],
+  idleMotionGroup: process.env.NEXT_PUBLIC_IDLE_MOTION_GROUP || '',
+  neutralMotionGroup: process.env.NEXT_PUBLIC_NEUTRAL_MOTION_GROUP || '',
+  happyMotionGroup: process.env.NEXT_PUBLIC_HAPPY_MOTION_GROUP || '',
+  sadMotionGroup: process.env.NEXT_PUBLIC_SAD_MOTION_GROUP || '',
+  angryMotionGroup: process.env.NEXT_PUBLIC_ANGRY_MOTION_GROUP || '',
+  relaxedMotionGroup: process.env.NEXT_PUBLIC_RELAXED_MOTION_GROUP || '',
+  surprisedMotionGroup: process.env.NEXT_PUBLIC_SURPRISED_MOTION_GROUP || '',
+})
+
+type PersistedSettingsState = Partial<SettingsState> & {
+  presenceGreetingMessage?: string
+  presenceDepartureMessage?: string
+}
+
+const migratePersistedSettings = (
+  state?: PersistedSettingsState
+): PersistedSettingsState | undefined => {
+  if (!state) return state
+
+  const migrated = { ...state }
+
+  if (
+    migrated.selectAIService === 'openai' &&
+    typeof migrated.selectAIModel === 'string'
+  ) {
+    migrated.selectAIModel = migrateOpenAIModelName(migrated.selectAIModel)
+  }
+
+  if (typeof migrated.presenceGreetingMessage === 'string') {
+    if (!migrated.presenceGreetingPhrases?.length) {
+      migrated.presenceGreetingPhrases = migrated.presenceGreetingMessage
+        ? [createIdlePhrase(migrated.presenceGreetingMessage, 'happy', 0)]
+        : []
+    }
+    delete migrated.presenceGreetingMessage
+  }
+
+  if (typeof migrated.presenceDepartureMessage === 'string') {
+    if (!migrated.presenceDeparturePhrases?.length) {
+      migrated.presenceDeparturePhrases = migrated.presenceDepartureMessage
+        ? [createIdlePhrase(migrated.presenceDepartureMessage, 'neutral', 0)]
+        : []
+    }
+    delete migrated.presenceDepartureMessage
+  }
+
+  return migrated
+}
+
+const mergePersistedSettings = (
+  persistedState: unknown,
+  currentState: SettingsState
+): SettingsState => {
+  const migratedState = migratePersistedSettings(
+    persistedState as PersistedSettingsState | undefined
+  )
+  const mergedState = {
+    ...currentState,
+    ...migratedState,
+  }
+
+  if (process.env.NEXT_PUBLIC_ALWAYS_OVERRIDE_WITH_ENV_VARIABLES === 'true') {
+    return {
+      ...mergedState,
+      ...getInitialValuesFromEnv(),
+    }
+  }
+
+  return mergedState
+}
+
+const settingsStore = create<SettingsState>()(
+  exclusivityMiddleware(
+    persist(() => getInitialValuesFromEnv(), {
+      name: 'aitube-kit-settings',
+      merge: mergePersistedSettings,
+      partialize: (state) => ({
+        openaiKey: state.openaiKey,
+        anthropicKey: state.anthropicKey,
+        googleKey: state.googleKey,
+        azureKey: state.azureKey,
+        xaiKey: state.xaiKey,
+        groqKey: state.groqKey,
+        cohereKey: state.cohereKey,
+        mistralaiKey: state.mistralaiKey,
+        perplexityKey: state.perplexityKey,
+        fireworksKey: state.fireworksKey,
+        difyKey: state.difyKey,
+        deepseekKey: state.deepseekKey,
+        openrouterKey: state.openrouterKey,
+        lmstudioKey: state.lmstudioKey,
+        ollamaKey: state.ollamaKey,
+        koeiromapKey: state.koeiromapKey,
+        youtubeApiKey: state.youtubeApiKey,
+        elevenlabsApiKey: state.elevenlabsApiKey,
+        azureEndpoint: state.azureEndpoint,
+        selectAIService: state.selectAIService,
+        selectAIModel: state.selectAIModel,
+        localLlmUrl: state.localLlmUrl,
+        selectVoice: state.selectVoice,
+        koeiroParam: state.koeiroParam,
+        googleTtsType: state.googleTtsType,
+        voicevoxSpeaker: state.voicevoxSpeaker,
+        voicevoxSpeed: state.voicevoxSpeed,
+        voicevoxPitch: state.voicevoxPitch,
+        voicevoxIntonation: state.voicevoxIntonation,
+        voicevoxServerUrl: state.voicevoxServerUrl,
+        aivisSpeechSpeaker: state.aivisSpeechSpeaker,
+        aivisSpeechSpeed: state.aivisSpeechSpeed,
+        aivisSpeechPitch: state.aivisSpeechPitch,
+        aivisSpeechIntonationScale: state.aivisSpeechIntonationScale,
+        aivisSpeechServerUrl: state.aivisSpeechServerUrl,
+        aivisSpeechTempoDynamics: state.aivisSpeechTempoDynamics,
+        aivisSpeechPrePhonemeLength: state.aivisSpeechPrePhonemeLength,
+        aivisSpeechPostPhonemeLength: state.aivisSpeechPostPhonemeLength,
+        aivisCloudApiKey: state.aivisCloudApiKey,
+        aivisCloudModelUuid: state.aivisCloudModelUuid,
+        aivisCloudStyleId: state.aivisCloudStyleId,
+        aivisCloudStyleName: state.aivisCloudStyleName,
+        aivisCloudUseStyleName: state.aivisCloudUseStyleName,
+        aivisCloudSpeed: state.aivisCloudSpeed,
+        aivisCloudPitch: state.aivisCloudPitch,
+        aivisCloudIntonationScale: state.aivisCloudIntonationScale,
+        aivisCloudTempoDynamics: state.aivisCloudTempoDynamics,
+        aivisCloudPrePhonemeLength: state.aivisCloudPrePhonemeLength,
+        aivisCloudPostPhonemeLength: state.aivisCloudPostPhonemeLength,
+        stylebertvits2ServerUrl: state.stylebertvits2ServerUrl,
+        stylebertvits2ModelId: state.stylebertvits2ModelId,
+        stylebertvits2ApiKey: state.stylebertvits2ApiKey,
+        stylebertvits2Style: state.stylebertvits2Style,
+        stylebertvits2SdpRatio: state.stylebertvits2SdpRatio,
+        stylebertvits2Length: state.stylebertvits2Length,
+        gsviTtsServerUrl: state.gsviTtsServerUrl,
+        gsviTtsModelId: state.gsviTtsModelId,
+        gsviTtsBatchSize: state.gsviTtsBatchSize,
+        gsviTtsSpeechRate: state.gsviTtsSpeechRate,
+        elevenlabsVoiceId: state.elevenlabsVoiceId,
+        cartesiaVoiceId: state.cartesiaVoiceId,
+        difyUrl: state.difyUrl,
+        difyConversationId: state.difyConversationId,
+        youtubeMode: state.youtubeMode,
+        youtubeLiveId: state.youtubeLiveId,
+        youtubeCommentSource: state.youtubeCommentSource,
+        onecommePort: state.onecommePort,
+        youtubeCommentInterval: state.youtubeCommentInterval,
+        conversationContinuityMode: state.conversationContinuityMode,
+        conversationContinuityNewTopicThreshold:
+          state.conversationContinuityNewTopicThreshold,
+        conversationContinuitySleepThreshold:
+          state.conversationContinuitySleepThreshold,
+        conversationContinuityPromptEvaluate:
+          state.conversationContinuityPromptEvaluate,
+        conversationContinuityPromptContinuation:
+          state.conversationContinuityPromptContinuation,
+        conversationContinuityPromptSelectComment:
+          state.conversationContinuityPromptSelectComment,
+        conversationContinuityPromptNewTopic:
+          state.conversationContinuityPromptNewTopic,
+        conversationContinuityPromptSleep:
+          state.conversationContinuityPromptSleep,
+        characterName: state.characterName,
+        userDisplayName: state.userDisplayName,
+        characterPreset1: state.characterPreset1,
+        characterPreset2: state.characterPreset2,
+        characterPreset3: state.characterPreset3,
+        characterPreset4: state.characterPreset4,
+        characterPreset5: state.characterPreset5,
+        customPresetName1: state.customPresetName1,
+        customPresetName2: state.customPresetName2,
+        customPresetName3: state.customPresetName3,
+        customPresetName4: state.customPresetName4,
+        customPresetName5: state.customPresetName5,
+        selectedPresetIndex: state.selectedPresetIndex,
+        showAssistantText: state.showAssistantText,
+        showCharacterName: state.showCharacterName,
+        systemPrompt: state.systemPrompt,
+        selectLanguage: state.selectLanguage,
+        changeEnglishToJapanese: state.changeEnglishToJapanese,
+        includeTimestampInUserMessage: state.includeTimestampInUserMessage,
+        externalLinkageMode: state.externalLinkageMode,
+        realtimeAPIMode: state.realtimeAPIMode,
+        realtimeAPIModeContentType: state.realtimeAPIModeContentType,
+        realtimeAPIModeVoice: state.realtimeAPIModeVoice,
+        audioMode: state.audioMode,
+        audioModeInputType: state.audioModeInputType,
+        audioModeVoice: state.audioModeVoice,
+        messageReceiverEnabled: state.messageReceiverEnabled,
+        clientId: state.clientId,
+        useSearchGrounding: state.useSearchGrounding,
+        openaiTTSVoice: state.openaiTTSVoice,
+        openaiTTSModel: state.openaiTTSModel,
+        openaiTTSSpeed: state.openaiTTSSpeed,
+        azureTTSKey: state.azureTTSKey,
+        azureTTSEndpoint: state.azureTTSEndpoint,
+        selectedVrmPath: state.selectedVrmPath,
+        selectedLive2DPath: state.selectedLive2DPath,
+        fixedCharacterPosition: state.fixedCharacterPosition,
+        characterPosition: state.characterPosition,
+        characterRotation: state.characterRotation,
+        lightingIntensity: state.lightingIntensity,
+        modelType: state.modelType,
+        selectedPNGTuberPath: state.selectedPNGTuberPath,
+        pngTuberSensitivity: state.pngTuberSensitivity,
+        pngTuberChromaKeyEnabled: state.pngTuberChromaKeyEnabled,
+        pngTuberChromaKeyColor: state.pngTuberChromaKeyColor,
+        pngTuberChromaKeyTolerance: state.pngTuberChromaKeyTolerance,
+        pngTuberScale: state.pngTuberScale,
+        pngTuberOffsetX: state.pngTuberOffsetX,
+        pngTuberOffsetY: state.pngTuberOffsetY,
+        poseConfigs: state.poseConfigs,
+        neutralEmotions: state.neutralEmotions,
+        happyEmotions: state.happyEmotions,
+        sadEmotions: state.sadEmotions,
+        angryEmotions: state.angryEmotions,
+        relaxedEmotions: state.relaxedEmotions,
+        surprisedEmotions: state.surprisedEmotions,
+        idleMotionGroup: state.idleMotionGroup,
+        neutralMotionGroup: state.neutralMotionGroup,
+        happyMotionGroup: state.happyMotionGroup,
+        sadMotionGroup: state.sadMotionGroup,
+        angryMotionGroup: state.angryMotionGroup,
+        relaxedMotionGroup: state.relaxedMotionGroup,
+        surprisedMotionGroup: state.surprisedMotionGroup,
+        maxPastMessages: state.maxPastMessages,
+        useVideoAsBackground: state.useVideoAsBackground,
+        showQuickMenu: state.showQuickMenu,
+        temperature: state.temperature,
+        maxTokens: state.maxTokens,
+        reasoningMode: state.reasoningMode,
+        reasoningEffort: state.reasoningEffort,
+        reasoningTokenBudget: state.reasoningTokenBudget,
+        showThinkingText: state.showThinkingText,
+        noSpeechTimeout: state.noSpeechTimeout,
+        showSilenceProgressBar: state.showSilenceProgressBar,
+        continuousMicListeningMode: state.continuousMicListeningMode,
+        presetQuestions: state.presetQuestions,
+        showPresetQuestions: state.showPresetQuestions,
+        speechRecognitionMode: state.speechRecognitionMode,
+        whisperTranscriptionModel: state.whisperTranscriptionModel,
+        customApiUrl: state.customApiUrl,
+        customApiHeaders: state.customApiHeaders,
+        customApiBody: state.customApiBody,
+        customApiStream: state.customApiStream,
+        includeSystemMessagesInCustomApi:
+          state.includeSystemMessagesInCustomApi,
+        customApiIncludeMimeType: state.customApiIncludeMimeType,
+        initialSpeechTimeout: state.initialSpeechTimeout,
+        chatLogWidth: state.chatLogWidth,
+        imageDisplayPosition: state.imageDisplayPosition,
+        multiModalMode: state.multiModalMode,
+        multiModalAiDecisionPrompt: state.multiModalAiDecisionPrompt,
+        enableMultiModal: state.enableMultiModal,
+        colorTheme: state.colorTheme,
+        customModel: state.customModel,
+        memoryEnabled: state.memoryEnabled,
+        memorySimilarityThreshold: state.memorySimilarityThreshold,
+        memorySearchLimit: state.memorySearchLimit,
+        memoryMaxContextTokens: state.memoryMaxContextTokens,
+        presenceDetectionEnabled: state.presenceDetectionEnabled,
+        presenceGreetingPhrases: state.presenceGreetingPhrases,
+        presenceDepartureTimeout: state.presenceDepartureTimeout,
+        presenceCooldownTime: state.presenceCooldownTime,
+        presenceDetectionSensitivity: state.presenceDetectionSensitivity,
+        presenceDetectionThreshold: state.presenceDetectionThreshold,
+        presenceDebugMode: state.presenceDebugMode,
+        presenceDeparturePhrases: state.presenceDeparturePhrases,
+        presenceClearChatOnDeparture: state.presenceClearChatOnDeparture,
+        presenceSelectedCameraId: state.presenceSelectedCameraId,
+        // Idle mode settings
+        idleModeEnabled: state.idleModeEnabled,
+        idlePhrases: state.idlePhrases,
+        idlePlaybackMode: state.idlePlaybackMode,
+        idleInterval: state.idleInterval,
+        idleDefaultEmotion: state.idleDefaultEmotion,
+        idleTimePeriodEnabled: state.idleTimePeriodEnabled,
+        idleTimePeriodMorning: state.idleTimePeriodMorning,
+        idleTimePeriodMorningEmotion: state.idleTimePeriodMorningEmotion,
+        idleTimePeriodAfternoon: state.idleTimePeriodAfternoon,
+        idleTimePeriodAfternoonEmotion: state.idleTimePeriodAfternoonEmotion,
+        idleTimePeriodEvening: state.idleTimePeriodEvening,
+        idleTimePeriodEveningEmotion: state.idleTimePeriodEveningEmotion,
+        idleAiGenerationEnabled: state.idleAiGenerationEnabled,
+        idleAiPromptTemplate: state.idleAiPromptTemplate,
+        // Kiosk mode settings (kioskTemporaryUnlock is NOT persisted)
+        kioskModeEnabled: state.kioskModeEnabled,
+        kioskPasscode: state.kioskPasscode,
+        kioskGuidanceMessage: state.kioskGuidanceMessage,
+        kioskGuidanceTimeout: state.kioskGuidanceTimeout,
+        kioskMaxInputLength: state.kioskMaxInputLength,
+        kioskNgWords: state.kioskNgWords,
+        kioskNgWordEnabled: state.kioskNgWordEnabled,
+        thinkingPoseEnabled: state.thinkingPoseEnabled,
+        thinkingPoseId: state.thinkingPoseId,
+      }),
+    })
+  )
+)
+
+export default settingsStore

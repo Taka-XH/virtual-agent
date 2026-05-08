@@ -1,0 +1,132 @@
+import { NextApiRequest, NextApiResponse } from 'next'
+import {
+  isRestrictedMode,
+  createRestrictedModeErrorResponse,
+} from '@/utils/restrictedMode'
+
+type MessageType = 'direct_send' | 'ai_generate' | 'user_input'
+
+interface ReceivedMessage {
+  timestamp: number
+  message: string
+  type: MessageType
+  systemPrompt?: string
+  useCurrentSystemPrompt?: boolean
+  image?: string
+}
+
+interface MessageQueue {
+  messages: ReceivedMessage[]
+  lastAccessed: number
+}
+
+let messagesPerClient: { [clientId: string]: MessageQueue } = {}
+
+const CLIENT_TIMEOUT = 1000 * 60 * 5 // 5分
+const MAX_IMAGE_CHARS = 10_000_000 // 約7.5MBのbase64画像に相当
+
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '10mb',
+    },
+  },
+}
+
+const handler = (req: NextApiRequest, res: NextApiResponse) => {
+  if (isRestrictedMode()) {
+    return res.status(403).json(createRestrictedModeErrorResponse('messages'))
+  }
+
+  const clientId = req.query.clientId as string
+  const type = (req.query.type as MessageType) || 'direct_send'
+
+  if (!clientId) {
+    res.status(400).json({ error: 'Client ID is required' })
+    return
+  }
+
+  if (req.method === 'POST') {
+    const { messages, systemPrompt, useCurrentSystemPrompt, image } = req.body
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: 'Messages array is required' })
+      return
+    }
+    if (systemPrompt && typeof systemPrompt !== 'string') {
+      res.status(400).json({ error: 'System prompt is not a string' })
+      return
+    }
+    if (useCurrentSystemPrompt && typeof useCurrentSystemPrompt !== 'boolean') {
+      res.status(400).json({ error: 'useCurrentSystemPrompt is not a boolean' })
+      return
+    }
+    // nullをundefinedに正規化
+    const sanitizedImage =
+      image === null || image === undefined ? undefined : image
+    if (sanitizedImage !== undefined && typeof sanitizedImage !== 'string') {
+      res.status(400).json({ error: 'Image is not a string' })
+      return
+    }
+    if (
+      typeof sanitizedImage === 'string' &&
+      sanitizedImage.length > MAX_IMAGE_CHARS
+    ) {
+      res.status(413).json({ error: 'Image payload is too large' })
+      return
+    }
+
+    // クライアントキューのクリーンアップ
+    cleanupClientQueues()
+
+    // クライアントのキューが存在しない場合は作成
+    if (!messagesPerClient[clientId]) {
+      messagesPerClient[clientId] = { messages: [], lastAccessed: Date.now() }
+    }
+
+    // メッセージをクライアントのキューに追加
+    const timestamp = Date.now()
+    messages.forEach((message) => {
+      messagesPerClient[clientId].messages.push({
+        timestamp,
+        message,
+        type,
+        systemPrompt,
+        useCurrentSystemPrompt,
+        image: sanitizedImage,
+      })
+    })
+    messagesPerClient[clientId].lastAccessed = timestamp
+
+    res.status(201).json({ message: 'Successfully sent' })
+  } else if (req.method === 'GET') {
+    // クライアントのキューが存在しない場合は作成
+    if (!messagesPerClient[clientId]) {
+      messagesPerClient[clientId] = { messages: [], lastAccessed: Date.now() }
+    }
+
+    // クライアントのキューから全てのメッセージを取得
+    const clientQueue = messagesPerClient[clientId]
+    const newMessages = clientQueue.messages
+
+    res.status(200).json({ messages: newMessages })
+
+    // キューをクリア
+    clientQueue.messages = []
+    clientQueue.lastAccessed = Date.now()
+  } else {
+    res.status(405).json({ error: 'Method not allowed' })
+  }
+}
+
+// 古いクライアントのキューを削除
+function cleanupClientQueues() {
+  const now = Date.now()
+  for (const clientId of Object.keys(messagesPerClient)) {
+    if (now - messagesPerClient[clientId].lastAccessed > CLIENT_TIMEOUT) {
+      delete messagesPerClient[clientId]
+    }
+  }
+}
+
+export default handler

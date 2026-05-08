@@ -1,0 +1,224 @@
+import Image from 'next/image'
+import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { EMOTIONS } from '@/features/messages/messages'
+
+import homeStore from '@/features/stores/home'
+import settingsStore from '@/features/stores/settings'
+import { messageSelectors } from '@/features/messages/messageSelectors'
+
+export const ChatLog = () => {
+  const chatScrollRef = useRef<HTMLDivElement>(null)
+  const resizeHandleRef = useRef<HTMLDivElement>(null)
+  const chatLogRef = useRef<HTMLDivElement>(null)
+
+  const characterName = settingsStore((s) => s.characterName)
+  const userDisplayName = settingsStore((s) => s.userDisplayName)
+  const chatLogWidth = settingsStore((s) => s.chatLogWidth)
+  const messages = messageSelectors.getTextAndImageMessages(
+    homeStore((s) => s.chatLog)
+  )
+
+  const [isDragging, setIsDragging] = useState<boolean>(false)
+
+  useEffect(() => {
+    chatScrollRef.current?.scrollIntoView({
+      behavior: 'auto',
+      block: 'center',
+    })
+  }, [])
+
+  useEffect(() => {
+    chatScrollRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    })
+  }, [messages])
+
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      setIsDragging(true)
+    }
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return
+
+      const newWidth = e.clientX
+
+      const constrainedWidth = Math.max(
+        300,
+        Math.min(newWidth, window.innerWidth * 0.8)
+      )
+
+      settingsStore.setState({ chatLogWidth: constrainedWidth })
+    }
+
+    const handleMouseUp = () => {
+      setIsDragging(false)
+    }
+
+    const resizeHandle = resizeHandleRef.current
+    if (resizeHandle) {
+      resizeHandle.addEventListener('mousedown', handleMouseDown)
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+    }
+
+    return () => {
+      if (resizeHandle) {
+        resizeHandle.removeEventListener('mousedown', handleMouseDown)
+      }
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDragging])
+
+  return (
+    <div
+      ref={chatLogRef}
+      className="absolute h-[100svh] pb-16 z-10 max-w-full"
+      style={{ width: `${chatLogWidth}px` }}
+    >
+      <div className="max-h-full px-2 sm:px-4 pt-24 pb-16 overflow-y-auto scroll-hidden">
+        {messages.map((msg, i) => {
+          return (
+            <div key={i} ref={messages.length - 1 === i ? chatScrollRef : null}>
+              {typeof msg.content === 'string' ? (
+                <Chat
+                  role={msg.role}
+                  message={msg.content}
+                  thinking={msg.thinking}
+                  characterName={characterName}
+                  userName={msg.userName}
+                  userDisplayName={userDisplayName}
+                />
+              ) : (
+                <>
+                  <Chat
+                    role={msg.role}
+                    message={msg.content ? msg.content[0].text : ''}
+                    thinking={msg.thinking}
+                    characterName={characterName}
+                    userName={msg.userName}
+                    userDisplayName={userDisplayName}
+                  />
+                  <ChatImage
+                    role={msg.role}
+                    imageUrl={msg.content ? msg.content[1].image : ''}
+                    characterName={characterName}
+                  />
+                </>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div
+        ref={resizeHandleRef}
+        className="absolute top-0 right-0 h-full w-4 cursor-ew-resize hover:bg-secondary hover:bg-opacity-20"
+        style={{
+          cursor: isDragging ? 'grabbing' : 'ew-resize',
+        }}
+      >
+        <div className="absolute top-1/2 right-1 h-16 w-1 bg-secondary bg-opacity-40 rounded-full transform -translate-y-1/2"></div>
+      </div>
+    </div>
+  )
+}
+
+const Chat = ({
+  role,
+  message,
+  thinking,
+  characterName,
+  userName,
+  userDisplayName,
+}: {
+  role: string
+  message: string
+  thinking?: string
+  characterName: string
+  userName?: string
+  userDisplayName: string
+}) => {
+  const { t } = useTranslation()
+  const showThinkingText = settingsStore((s) => s.showThinkingText)
+  const [isLocalExpanded, setIsLocalExpanded] = useState(false)
+  const isThinkingExpanded = showThinkingText || isLocalExpanded
+  const emotionPattern = new RegExp(`\\[(${EMOTIONS.join('|')})\\]\\s*`, 'gi')
+  const processedMessage = message
+    .replace(emotionPattern, '')
+    .replace(/\[motion:[^\]]*\]\s*/gi, '')
+
+  const roleColor =
+    role !== 'user' ? 'bg-secondary text-theme ' : 'bg-base-light text-primary'
+  const roleText = role !== 'user' ? 'text-secondary' : 'text-primary'
+  const offsetX = role === 'user' ? 'pl-4 sm:pl-10' : 'pr-4 sm:pr-10'
+
+  return (
+    <div className={`mx-auto ml-0 md:ml-10 lg:ml-20 my-4 ${offsetX}`}>
+      {role === 'code' ? (
+        <pre className="whitespace-pre-wrap break-words bg-[#1F2937] text-theme p-4 rounded-lg">
+          <code className="font-mono text-xs sm:text-sm">{message}</code>
+        </pre>
+      ) : (
+        <>
+          <div
+            className={`px-3 sm:px-6 py-2 rounded-t-lg text-sm sm:text-base font-bold tracking-wider ${roleColor}`}
+          >
+            {role !== 'user'
+              ? characterName || 'CHARACTER'
+              : userName || userDisplayName || 'YOU'}
+          </div>
+          <div className="px-3 sm:px-6 py-4 bg-white rounded-b-lg text-sm sm:text-base">
+            {thinking && role !== 'user' && (
+              <div className="mb-3">
+                <button
+                  onClick={() => setIsLocalExpanded(!isLocalExpanded)}
+                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  <span
+                    className={`inline-block transform transition-transform ${isThinkingExpanded ? 'rotate-90' : ''}`}
+                  >
+                    &#9654;
+                  </span>
+                  <span>{t('ThinkingProcess')}</span>
+                </button>
+                {isThinkingExpanded && (
+                  <div className="mt-2 px-3 py-2 border-l-2 border-gray-300 bg-gray-50 rounded text-xs text-gray-600 italic whitespace-pre-wrap">
+                    {thinking}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className={`font-bold ${roleText}`}>{processedMessage}</div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+const ChatImage = ({
+  role,
+  imageUrl,
+  characterName,
+}: {
+  role: string
+  imageUrl: string
+  characterName: string
+}) => {
+  const offsetX = role === 'user' ? 'pl-16 sm:pl-40' : 'pr-16 sm:pr-40'
+
+  return (
+    <div className={`mx-auto ml-0 md:ml-10 lg:ml-20 my-4 ${offsetX}`}>
+      <Image
+        src={imageUrl}
+        alt="Generated Image"
+        className="rounded-lg"
+        width={512}
+        height={512}
+      />
+    </div>
+  )
+}

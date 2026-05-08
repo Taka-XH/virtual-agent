@@ -1,0 +1,18 @@
+actions:
+  bathroom_light_on:
+    description: 洗面所の照明をつける
+    speak: 洗面所の電気をつけました。
+    emotion: happy
+    domain: light
+    service: turn_on
+    entity_id: light.xi_mian_suo
+  bathroom_light_off:
+    description: 浴室の照明を消す
+    speak: 洗面所の電気を消しました。
+    emotion: happy
+    domain: light
+    service: turn_off
+    entity_id: light.xi_mian_suo
+
+
+
