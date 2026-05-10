@@ -132,6 +132,8 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - `interaction-bridge` can optionally orchestrate STT/text before OpenClaw when `ORCHESTRATION_ENABLED=true`.
 - The orchestration fast path may call only action names returned by `ha-bridge /actions`; it must never construct arbitrary Home Assistant service calls.
 - Obvious home actions can go directly to `ha-bridge`. Casual talk, ambiguous input, and low-confidence classifications must still go to OpenClaw.
+- In the independent orchestration branch, keep `interaction-bridge` as the low-latency runtime. It may handle obvious home actions, lightweight replies, and memory-backed casual chat, but it should route requests that need OpenClaw memory, persona, skills, tools, or deeper reasoning back to OpenClaw.
+- The router may classify `needs_memory`, `needs_tools`, and `should_remember`. When routing to OpenClaw, it may tune the session through `sessions.patch` (`model`, `thinkingLevel`, `fastMode`, `reasoningLevel`) before `chat.send`.
 - After `chat.send`, `interaction-bridge` waits for the OpenClaw run and reads the latest assistant message. If `/speak` was not called during the run, it sends that assistant text to AITuber Kit. If `/speak` was already called, it skips auto-speech to avoid duplicate character speech.
 - `interaction-bridge` signs into OpenClaw as a paired device and requests operator scopes.
 - Docker services reach the host through `host.docker.internal`.

@@ -195,6 +195,36 @@ curl -X POST http://127.0.0.1:18089/send-text \
 
 期待される応答は `route: "home_action"` です。雑談の場合は `route: "openclaw"` になり、OpenClaw 側で自然応答します。
 
+### 独自オーケストレーションの方針
+
+このブランチでは OpenClaw へ寄せる実験とは分けて、`interaction-bridge` を低遅延 runtime として育てます。ただし OpenClaw の memory、persona、skill、モデル設定を捨てるのではなく、入力ごとに使い分けます。
+
+```text
+明確な家電操作
+  -> interaction-bridge -> ha-bridge
+
+軽い相槌・記憶不要の短い雑談
+  -> interaction-bridge -> direct LLM -> AITuber Kit
+
+過去履歴・好み・persona・tool/skill が必要な会話
+  -> OpenClaw
+```
+
+router は `home_action` / `quick_reply` / `memory_chat` / `openclaw` のような経路を返す想定です。`needs_memory`、`needs_tools`、`should_remember`、`openclaw_profile` も返し、OpenClaw に送る場合は必要に応じて `sessions.patch` でセッションの `model`、`thinkingLevel`、`fastMode`、`reasoningLevel` を調整します。
+
+判断の目安:
+
+- `quick_reply`: 「ありがとう」「ただいま」「一言で励まして」など、履歴がなくても自然に返せるもの
+- `memory_chat`: 直近の会話履歴や簡単なプロフィール要約だけで十分な雑談
+- `openclaw`: 「前に話した件」「いつもの設定」「覚えておいて」「調べて」「複数 tool が必要」など、OpenClaw の memory / skill / persona を使うべきもの
+
+OpenClaw 自体を速くする案:
+
+- router で簡単な依頼は `fastMode=true`、`thinkingLevel=off`、`reasoningLevel=off` に寄せる
+- 深い推論が必要な依頼だけ強いモデルや thinking を使う
+- 履歴参照が不要な依頼は別セッションや短い履歴のセッションへ逃がす
+- OpenClaw の `chat.send` は非同期 ack なので、必要なら「先に短い相槌を発話し、OpenClaw の本回答を待つ」体感速度改善も検討する
+
 ## 常時待受音声入力
 
 `voice-listener` を使うと、ブラウザ録音ボタンを押さずにローカルマイクで wake word 待受できます。
