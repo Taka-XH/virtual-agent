@@ -135,8 +135,9 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - In the independent orchestration branch, keep `interaction-bridge` as the low-latency runtime. It may handle obvious home actions, lightweight replies, and memory-backed casual chat, but it should route requests that need OpenClaw memory, persona, skills, tools, or deeper reasoning back to OpenClaw.
 - A small deterministic `local_quick_reply` layer is allowed for very common low-risk phrases so the companion still feels responsive when the LLM router is unavailable.
 - A small deterministic `local_openclaw_required` layer should catch obvious memory/tool phrases before the LLM router, avoiding wasted router latency.
+- A small deterministic `local_memory_chat_requested` layer should catch recent-history phrases such as "さっき" or "今の流れ" before the LLM router.
 - The router may classify `needs_memory`, `needs_tools`, and `should_remember`. When routing to OpenClaw, it may tune the session through `sessions.patch` (`model`, `thinkingLevel`, `fastMode`, `reasoningLevel`) before `chat.send`.
-- Local casual chat memory lives in SQLite at `MEMORY_DB_PATH`. Keep it lightweight: recent turns plus a compact `profile_summary`, not a full replacement for OpenClaw memory.
+- Local casual chat memory lives in SQLite at `MEMORY_DB_PATH`. Keep it lightweight: recent turns plus a compact `profile_summary`, not a full replacement for OpenClaw memory. Only update `profile_summary` when `should_remember=true`; short-term `memory_chat` alone should not create long-term memory.
 - `OPENCLAW_SESSION_TUNING_ENABLED` must stay opt-in because `sessions.patch` persists session-level overrides.
 - After `chat.send`, `interaction-bridge` waits for the OpenClaw run and reads the latest assistant message. If `/speak` was not called during the run, it sends that assistant text to AITuber Kit. If `/speak` was already called, it skips auto-speech to avoid duplicate character speech.
 - `interaction-bridge` signs into OpenClaw as a paired device and requests operator scopes.

@@ -171,7 +171,7 @@ http://127.0.0.1:18089
 ORCHESTRATION_ENABLED=false
 ORCHESTRATOR_LLM_ENABLED=true
 ORCHESTRATOR_MODEL=gpt-4o-mini
-ORCHESTRATOR_TIMEOUT_SECONDS=3
+ORCHESTRATOR_TIMEOUT_SECONDS=2.5
 HA_BRIDGE_URL=http://ha-bridge:8088
 CASUAL_CHAT_ENABLED=true
 CASUAL_CHAT_MODEL=gpt-4o-mini
@@ -181,7 +181,7 @@ MEMORY_DB_PATH=/home/node/.openclaw/interaction-bridge-memory.sqlite3
 OPENCLAW_SESSION_TUNING_ENABLED=false
 ```
 
-`ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合は「ありがとう」「ただいま」「疲れた」などの小さな quick reply を即返答します。「前に話した」「覚えておいて」「調べて」のように OpenClaw が必要な語句は OpenClaw へ直行します。それ以外だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。軽い雑談は `quick_reply` または `memory_chat` として direct LLM が返答し、OpenClaw の memory / skill / persona / 深い推論が必要なものは OpenClaw へ渡します。
+`ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合は「ありがとう」「ただいま」「疲れた」などの小さな quick reply を即返答します。「前に話した」「覚えておいて」「調べて」のように OpenClaw が必要な語句は OpenClaw へ直行します。「さっき」「今の流れ」「最近の会話」のような直近履歴参照は LLM router を待たず `memory_chat` に入ります。それ以外だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。軽い雑談は `quick_reply` または `memory_chat` として direct LLM が返答し、OpenClaw の memory / skill / persona / 深い推論が必要なものは OpenClaw へ渡します。
 
 安全上、router が自由な Home Assistant service を呼ぶことはありません。実行できるのは `ha-bridge /actions` に出てくる許可済み action だけです。
 
@@ -222,8 +222,10 @@ router は `home_action` / `quick_reply` / `memory_chat` / `openclaw` のよう�
 判断の目安:
 
 - `quick_reply`: 「ありがとう」「ただいま」「一言で励まして」など、履歴がなくても自然に返せるもの
-- `memory_chat`: 直近の会話履歴や簡単なプロフィール要約だけで十分な雑談
+- `memory_chat`: 「さっき」「今の流れ」「最近の会話」など、直近の会話履歴だけで十分な雑談
 - `openclaw`: 「前に話した件」「いつもの設定」「覚えておいて」「調べて」「複数 tool が必要」など、OpenClaw の memory / skill / persona を使うべきもの
+
+長期記憶の要約更新は `should_remember=true` の時だけ行います。単なる `memory_chat` は短期履歴を参照するだけで、安定した好みとしては保存しません。
 
 OpenClaw 自体を速くする案:
 

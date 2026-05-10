@@ -77,7 +77,7 @@ ORCHESTRATOR_LLM_ENABLED = os.getenv("ORCHESTRATOR_LLM_ENABLED", "true").strip()
     "on",
 }
 ORCHESTRATOR_MODEL = os.getenv("ORCHESTRATOR_MODEL", "gpt-4o-mini").strip()
-ORCHESTRATOR_TIMEOUT_SECONDS = float(os.getenv("ORCHESTRATOR_TIMEOUT_SECONDS", "3"))
+ORCHESTRATOR_TIMEOUT_SECONDS = float(os.getenv("ORCHESTRATOR_TIMEOUT_SECONDS", "2.5"))
 HA_BRIDGE_URL = os.getenv("HA_BRIDGE_URL", "http://ha-bridge:8088").rstrip("/")
 
 # Direct casual talk path. This keeps lightweight conversation responsive while
@@ -538,6 +538,8 @@ def local_quick_reply(text: str) -> str | None:
         return "おやすみなさい。ゆっくり休んでくださいね。"
     if any(word in normalized for word in ("疲れた", "つかれた", "励まして", "はげまして")):
         return "今日もよく頑張りました。少し肩の力を抜いて、ちゃんと休みましょう。"
+    if any(word in normalized for word in ("短い一言", "ひとこと", "一言ください", "一言をください")):
+        return "大丈夫。今のあなたのペースで、ちゃんと進めています。"
 
     return None
 
@@ -566,6 +568,24 @@ def local_openclaw_required(text: str) -> bool:
         "メモして",
     )
     return any(word in normalized for word in memory_markers + tool_markers)
+
+
+def local_memory_chat_requested(text: str) -> bool:
+    normalized = normalize_japanese_command(text)
+    if not normalized:
+        return False
+
+    markers = (
+        "さっき",
+        "さきほど",
+        "先ほど",
+        "今の流れ",
+        "会話の流れ",
+        "最近の会話",
+        "今話した",
+        "直近",
+    )
+    return any(word in normalized for word in markers)
 
 
 def parse_orchestrator_json(raw_text: str) -> Dict[str, Any] | None:
@@ -605,43 +625,48 @@ async def classify_with_orchestrator_model(
         "ユーザー入力を実行経路に分類してください。"
         "許可済み家電操作に明確に一致する場合だけ home_action にしてください。"
         "履歴や記憶が不要な軽い返答は quick_reply にしてください。"
-        "直近履歴や簡単なプロフィールで返せる自然会話は memory_chat にしてください。"
+        "「さっき」「先ほど」「今の流れ」「最近の会話」「直近」など直前の会話を参照する自然会話は memory_chat にしてください。"
+        "直近履歴や簡単なプロフィールで返せる自然会話も memory_chat にしてください。"
         "OpenClawのmemory、persona、skill、tool、深い推論、調査、永続記憶が必要なら openclaw にしてください。"
+        "「覚えておいて」「忘れないで」など永続記憶の明示依頼は openclaw にしてください。"
         "quick_reply ではそのまま発話できる短い日本語 reply を入れてください。"
         "出力はJSONのみです。"
     )
 
     started_at = time.monotonic()
     try:
-        response = await asyncio.to_thread(
-            openai_client.chat.completions.create,
-            model=ORCHESTRATOR_MODEL,
-            temperature=0,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "text": text,
-                            "allowed_actions": allowed_actions,
-                            "schema": {
-                                "route": "home_action | quick_reply | memory_chat | openclaw | clarification",
-                                "action": "allowed action name or null",
-                                "confidence": "0.0-1.0",
-                                "reply": "quick_reply route only: short Japanese reply or null",
-                                "needs_memory": "boolean",
-                                "needs_tools": "boolean",
-                                "should_remember": "boolean",
-                                "openclaw_profile": "fast | balanced | deep",
-                                "reason": "short Japanese reason",
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                openai_client.chat.completions.create,
+                model=ORCHESTRATOR_MODEL,
+                temperature=0,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "text": text,
+                                "allowed_actions": allowed_actions,
+                                "schema": {
+                                    "route": "home_action | quick_reply | memory_chat | openclaw | clarification",
+                                    "action": "allowed action name or null",
+                                    "confidence": "0.0-1.0",
+                                    "reply": "quick_reply route only: short Japanese reply or null",
+                                    "needs_memory": "boolean",
+                                    "needs_tools": "boolean",
+                                    "should_remember": "boolean",
+                                    "openclaw_profile": "fast | balanced | deep",
+                                    "reason": "short Japanese reason",
+                                },
                             },
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                timeout=ORCHESTRATOR_TIMEOUT_SECONDS,
+            ),
             timeout=ORCHESTRATOR_TIMEOUT_SECONDS,
         )
     except Exception as e:
@@ -701,17 +726,20 @@ async def generate_casual_reply(
         "profile_summary": profile_summary,
         "recent_messages": recent_messages,
     }
-    response = await asyncio.to_thread(
-        openai_client.chat.completions.create,
-        model=CASUAL_CHAT_MODEL,
-        temperature=0.7,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": json.dumps(user_payload, ensure_ascii=False),
-            },
-        ],
+    response = await asyncio.wait_for(
+        asyncio.to_thread(
+            openai_client.chat.completions.create,
+            model=CASUAL_CHAT_MODEL,
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(user_payload, ensure_ascii=False),
+                },
+            ],
+            timeout=CASUAL_CHAT_TIMEOUT_SECONDS,
+        ),
         timeout=CASUAL_CHAT_TIMEOUT_SECONDS,
     )
     reply = (response.choices[0].message.content if response.choices else "") or ""
@@ -748,14 +776,17 @@ async def update_profile_summary(text: str, reply: str, route: str) -> None:
         },
     }
     try:
-        response = await asyncio.to_thread(
-            openai_client.chat.completions.create,
-            model=CASUAL_CHAT_MODEL,
-            temperature=0,
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                openai_client.chat.completions.create,
+                model=CASUAL_CHAT_MODEL,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                timeout=CASUAL_CHAT_TIMEOUT_SECONDS,
+            ),
             timeout=CASUAL_CHAT_TIMEOUT_SECONDS,
         )
     except Exception:
@@ -769,7 +800,7 @@ async def update_profile_summary(text: str, reply: str, route: str) -> None:
 
 def schedule_memory_update(text: str, reply: str, route: str, router: Dict[str, Any] | None) -> None:
     should_remember = normalize_bool((router or {}).get("should_remember"))
-    if should_remember or route == "memory_chat":
+    if should_remember:
         asyncio.create_task(update_profile_summary(text, reply, route))
 
 
@@ -875,18 +906,6 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             "ha_bridge": ha_result,
         }
 
-    quick_reply = local_quick_reply(text)
-    if quick_reply:
-        return await finish_direct_reply(
-            text,
-            route="quick_reply",
-            reply=quick_reply,
-            router=None,
-            source="local_quick_reply",
-            started_at=started_at,
-            extra={"actions_elapsed_ms": actions_elapsed_ms},
-        )
-
     if local_openclaw_required(text):
         openclaw_started_at = time.monotonic()
         openclaw_result = await send_to_openclaw(text)
@@ -902,6 +921,70 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             },
             "openclaw": openclaw_result,
         }
+
+    if local_memory_chat_requested(text):
+        try:
+            generated = await generate_casual_reply(
+                text,
+                route="memory_chat",
+                router={
+                    "route": "memory_chat",
+                    "confidence": 1.0,
+                    "reason": "直近の会話履歴を参照する表現をローカル判定",
+                    "needs_memory": True,
+                    "needs_tools": False,
+                    "should_remember": False,
+                    "openclaw_profile": "fast",
+                },
+            )
+            return await finish_direct_reply(
+                text,
+                route="memory_chat",
+                reply=generated["reply"],
+                router={
+                    "route": "memory_chat",
+                    "confidence": 1.0,
+                    "reason": "直近の会話履歴を参照する表現をローカル判定",
+                    "needs_memory": True,
+                    "needs_tools": False,
+                    "should_remember": False,
+                    "openclaw_profile": "fast",
+                },
+                source="local_memory_chat",
+                started_at=started_at,
+                extra={
+                    "actions_elapsed_ms": actions_elapsed_ms,
+                    "casual_chat": generated,
+                },
+            )
+        except Exception as e:
+            openclaw_started_at = time.monotonic()
+            openclaw_result = await send_to_openclaw(text)
+            return {
+                "status": "ok",
+                "route": "openclaw",
+                "text": text,
+                "orchestration": {
+                    "source": "local_memory_chat_fallback",
+                    "error": str(e),
+                    "actions_elapsed_ms": actions_elapsed_ms,
+                    "openclaw_elapsed_ms": elapsed_ms(openclaw_started_at),
+                    "total_elapsed_ms": elapsed_ms(started_at),
+                },
+                "openclaw": openclaw_result,
+            }
+
+    quick_reply = local_quick_reply(text)
+    if quick_reply:
+        return await finish_direct_reply(
+            text,
+            route="quick_reply",
+            reply=quick_reply,
+            router=None,
+            source="local_quick_reply",
+            started_at=started_at,
+            extra={"actions_elapsed_ms": actions_elapsed_ms},
+        )
 
     model_route = await classify_with_orchestrator_model(text, actions)
     if model_route:
