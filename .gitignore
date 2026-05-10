@@ -27,6 +27,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+*.bk
+*.bak
 
 # Backups of nested repositories kept while converting to monorepo
 openclaw/.git.backup-before-monorepo/

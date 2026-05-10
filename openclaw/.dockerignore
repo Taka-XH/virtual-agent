@@ -1,4 +1,6 @@
 .git
+.git.backup-before-monorepo
+**/.git.backup-before-monorepo
 .worktrees
 
 # Sensitive files – scripts/docker/setup.sh writes .env with OPENCLAW_GATEWAY_TOKEN

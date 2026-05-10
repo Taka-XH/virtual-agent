@@ -1,8 +1,16 @@
-numpy>=2.4,<3
-openai>=2.36,<3
-openwakeword>=0.6,<0.7
-onnxruntime>=1.25,<2
-python-dotenv>=1.2,<2
-requests>=2.33,<3
-sounddevice>=0.5,<0.6
-webrtcvad-wheels>=2.0,<3
+# numpy>=2.4,<3
+# openai>=2.36,<3
+# openwakeword>=0.6,<0.7
+# onnxruntime>=1.25,<2
+# python-dotenv>=1.2,<2
+# requests>=2.33,<3
+# sounddevice>=0.5,<0.6
+# webrtcvad-wheels>=2.0,<3
+
+sounddevice
+numpy
+requests
+python-dotenv
+openai
+openwakeword
+webrtcvad-wheels

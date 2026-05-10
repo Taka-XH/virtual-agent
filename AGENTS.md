@@ -129,12 +129,18 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - `openclaw/docker-compose.override.yml` contains local integration settings.
 - `OPENCLAW_AGENT_RUNTIME=pi` is intentional. It avoids the missing `codex` harness error in this Docker setup.
 - `ha-bridge` calls `interaction-bridge /speak` after a successful Home Assistant action. This makes speech reliable even when the OpenClaw model does not follow the skill instruction to call `/speak`.
+- `interaction-bridge` sends raw STT/text to OpenClaw. OpenClaw should decide whether the input is casual talk or a home action.
+- After `chat.send`, `interaction-bridge` waits for the OpenClaw run and reads the latest assistant message. If `/speak` was not called during the run, it sends that assistant text to AITuber Kit. If `/speak` was already called, it skips auto-speech to avoid duplicate character speech.
 - `interaction-bridge` signs into OpenClaw as a paired device and requests operator scopes.
 - Docker services reach the host through `host.docker.internal`.
-- `voice-listener` uses `openwakeword` with `hey_jarvis` and OpenAI audio transcription. The current default STT model is `gpt-4o-transcribe`.
+- `voice-listener` uses `openwakeword` with the custom `Hey_Kemy` model at `voice-listener/models/Hey_Kemy.onnx` and OpenAI audio transcription. The current default STT model is `gpt-4o-transcribe`.
 - `voice-listener` must preserve unused audio samples between reads. Dropping the remainder from a larger microphone chunk corrupts recordings and hurts STT accuracy.
 - Failed or skipped voice recordings are saved to `/tmp/voice-listener-last.wav` when `LAST_WAV_PATH` is set.
 - `MIC_GAIN` is a digital gain applied in `audio_callback`; watch `peak` in logs to avoid clipping.
+- `VAD_AGGRESSIVENESS` controls WebRTC VAD strictness. Use `3` for noisy rooms and lower it if quiet speech is missed.
+- Keep `STT_PROMPT` neutral. Strong candidate prompts can turn low-level noise into a plausible smart-home command.
+- Quiet rejected recordings should not call `speak_status`; spoken error prompts can feed back into the microphone and trigger more false wakes.
+- `VAD_START_FRAMES` and `MIN_SPEECH_SECONDS` are the main filters for post-wake noise being treated as a spoken command.
 
 ## Editing Guidance
 

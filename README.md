@@ -4,20 +4,18 @@
 
 このリポジトリには、OpenClaw、AITuber Kit、Home Assistant 連携ブリッジ、音声入力/発話用ブリッジ、AITuber Kit へメッセージを送る WebSocket ブリッジが入っています。
 
-目的は、ブラウザで録音した音声を OpenClaw に渡し、家電操作を行い、その結果を AITuber Kit のキャラクターに発話させることです。
+目的は、音声やテキストを OpenClaw に渡し、OpenClaw が内容を判断して、カジュアルトークなら自然に応答し、家電操作なら Home Assistant を操作して、結果を AITuber Kit のキャラクターに発話させることです。
 
 ## 全体構成
 
 ```text
-ブラウザ録音
+ブラウザ録音 / voice-listener / テキスト入力
   -> openclaw/interaction-bridge
   -> OpenClaw gateway
-  -> openclaw/ha-bridge
-  -> Home Assistant
-  -> openclaw/interaction-bridge /speak
-  -> ha-character-bridge WebSocket
-  -> AITuber Kit
-  -> VOICEVOX
+  -> カジュアルトークなら OpenClaw が応答
+  -> 家電操作なら openclaw/ha-bridge -> Home Assistant
+  -> openclaw/interaction-bridge /speak または assistant_text
+  -> ha-character-bridge WebSocket -> AITuber Kit -> VOICEVOX
 ```
 
 ## ディレクトリ構成
@@ -72,7 +70,7 @@ ws://127.0.0.1:8000/ws
 
 現在の主な設定:
 
-- wake word: `hey_jarvis`
+- wake word: `Hey_Kemy` (`voice-listener/models/Hey_Kemy.onnx`)
 - STT: `gpt-4o-transcribe`
 - 最後の録音デバッグ: `/tmp/voice-listener-last.wav`
 - マイクゲイン: `MIC_GAIN`
@@ -145,15 +143,15 @@ interaction bridge のページを開きます。
 http://127.0.0.1:18089
 ```
 
-録音ボタンを使うと、以下の流れで処理されます。
+録音ボタンやテキスト入力を使うと、以下の流れで処理されます。
 
 1. ブラウザで音声を録音
 2. `interaction-bridge` が音声を文字起こし
 3. 文字起こしされたテキストを OpenClaw に送信
-4. OpenClaw が `ha-bridge` 経由で許可済みの Home Assistant 操作を選択
-5. `ha-bridge` が Home Assistant を操作
-6. 操作成功後、`ha-bridge` が `/speak` を呼び出し
-7. AITuber Kit のキャラクターが結果を発話
+4. OpenClaw がカジュアルトークか家電操作かを判断
+5. カジュアルトークなら OpenClaw の応答を AITuber Kit へ発話
+6. 家電操作なら `ha-bridge` 経由で許可済みの Home Assistant 操作を実行
+7. `/speak` が呼ばれた場合は、その発話を優先して二重発話を避ける
 
 ## 常時待受音声入力
 
@@ -169,6 +167,9 @@ cp .env.example .env
 ```
 
 `.env` に `OPENAI_API_KEY` を設定します。必要に応じて `MIC_DEVICE_INDEX` と `MIC_GAIN` を調整してください。
+雑音を音声として拾いやすい場合は `VAD_AGGRESSIVENESS` を上げます。`0` が最もゆるく、`3` が最も厳しい設定です。
+STT の `STT_PROMPT` は候補を強く指定しすぎると、雑音でも候補文へ寄ることがあります。通常は中立的なプロンプトにしてください。
+Wake 後の無音や短い雑音を発話として拾う場合は `VAD_START_FRAMES` や `MIN_SPEECH_SECONDS` を調整します。
 
 起動:
 
@@ -180,7 +181,7 @@ cd /Users/shin/work/V_agent/voice-listener
 使い方:
 
 ```text
-ヘイ ジャービス
+ヘイ ケミー
 洗面所の電気をつけて
 ```
 
@@ -196,6 +197,23 @@ afplay /tmp/voice-listener-last.wav
 rms=0.015 以上: 比較的良好
 peak=0.7 未満: 音割れしにくい
 peak=1.0 付近: MIC_GAIN を下げる
+peak=0.05 未満: 小さすぎるため STT に送らない
+```
+
+VAD の目安:
+
+```text
+VAD_AGGRESSIVENESS=2: 標準〜やや厳しめ
+VAD_AGGRESSIVENESS=3: 雑音に強いが、小さい声を落としやすい
+VAD_START_FRAMES=4: 20ms frame が4回連続で音声になったら録音開始
+```
+
+Wake 後の雑音対策:
+
+```text
+VAD_START_FRAMES: 録音開始に必要な連続音声フレーム数
+MIN_SPEECH_SECONDS: STT に送る最低音声判定時間
+FALSE_WAKE_COOLDOWN_SECONDS: 雑音として弾いた後の短い待機時間
 ```
 
 STT 精度に影響するため、`get_audio_samples` は余った音声サンプルを捨てずに次回へ持ち越します。ここを壊すと録音が不自然になり、認識精度が大きく落ちます。
