@@ -109,6 +109,21 @@ OPENCLAW_DEEP_THINKING_LEVEL = os.getenv("OPENCLAW_DEEP_THINKING_LEVEL", "").str
 
 FOLLOW_UP_LISTEN_SECONDS = float(os.getenv("FOLLOW_UP_LISTEN_SECONDS", "8"))
 
+# Small spoken acknowledgement before handing a slower turn to OpenClaw. This
+# improves perceived latency without changing the final OpenClaw answer.
+OPENCLAW_THINKING_ACK_ENABLED = os.getenv(
+    "OPENCLAW_THINKING_ACK_ENABLED",
+    "true",
+).strip().lower() in {"1", "true", "yes", "on"}
+OPENCLAW_THINKING_ACK_TEXT = os.getenv(
+    "OPENCLAW_THINKING_ACK_TEXT",
+    "承知しました。少し考えますね。",
+).strip()
+OPENCLAW_THINKING_ACK_EMOTION = os.getenv("OPENCLAW_THINKING_ACK_EMOTION", "happy").strip()
+OPENCLAW_THINKING_ACK_TIMEOUT_SECONDS = float(
+    os.getenv("OPENCLAW_THINKING_ACK_TIMEOUT_SECONDS", "2")
+)
+
 
 # ============================================================
 # App
@@ -158,6 +173,7 @@ def health():
         "casual_chat_model": CASUAL_CHAT_MODEL,
         "memory_db_path": MEMORY_DB_PATH,
         "openclaw_session_tuning_enabled": OPENCLAW_SESSION_TUNING_ENABLED,
+        "openclaw_thinking_ack_enabled": OPENCLAW_THINKING_ACK_ENABLED,
     }
 
 
@@ -672,6 +688,14 @@ async def classify_with_orchestrator_model(
             ),
             timeout=ORCHESTRATOR_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError:
+        return {
+            "route": "casual_talk",
+            "action": None,
+            "confidence": 0.0,
+            "reason": f"orchestrator timed out after {ORCHESTRATOR_TIMEOUT_SECONDS:.1f}s",
+            "elapsed_ms": elapsed_ms(started_at),
+        }
     except Exception as e:
         return {
             "route": "casual_talk",
@@ -722,6 +746,30 @@ def build_conversation_state(reply: str | None, route: str) -> Dict[str, Any]:
         "listen_timeout_seconds": FOLLOW_UP_LISTEN_SECONDS if continue_listening else 0,
         "reason": "assistant asked or proposed a follow-up" if continue_listening else "assistant did not ask for follow-up",
     }
+
+
+async def maybe_speak_openclaw_thinking_ack() -> Dict[str, Any] | None:
+    if not OPENCLAW_THINKING_ACK_ENABLED or not OPENCLAW_THINKING_ACK_TEXT:
+        return None
+
+    started_at = time.monotonic()
+    try:
+        await asyncio.wait_for(
+            send_to_aituber(OPENCLAW_THINKING_ACK_TEXT, OPENCLAW_THINKING_ACK_EMOTION or "happy"),
+            timeout=OPENCLAW_THINKING_ACK_TIMEOUT_SECONDS,
+        )
+        return {
+            "status": "ok",
+            "text": OPENCLAW_THINKING_ACK_TEXT,
+            "emotion": OPENCLAW_THINKING_ACK_EMOTION or "happy",
+            "elapsed_ms": elapsed_ms(started_at),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "elapsed_ms": elapsed_ms(started_at),
+        }
 
 
 async def generate_casual_reply(
@@ -894,6 +942,7 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
     try:
         actions = await fetch_ha_actions()
     except Exception as e:
+        thinking_ack = await maybe_speak_openclaw_thinking_ack()
         openclaw_started_at = time.monotonic()
         openclaw_result = await send_to_openclaw(text)
         conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
@@ -909,6 +958,7 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             "orchestration": {
                 "source": "fallback",
                 "error": f"failed to load ha actions: {e}",
+                "thinking_ack": thinking_ack,
                 "openclaw_elapsed_ms": elapsed_ms(openclaw_started_at),
                 "total_elapsed_ms": elapsed_ms(started_at),
             },
@@ -937,6 +987,7 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
         }
 
     if local_openclaw_required(text):
+        thinking_ack = await maybe_speak_openclaw_thinking_ack()
         openclaw_started_at = time.monotonic()
         openclaw_result = await send_to_openclaw(text)
         conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
@@ -952,6 +1003,7 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             "orchestration": {
                 "source": "local_openclaw_required",
                 "actions_elapsed_ms": actions_elapsed_ms,
+                "thinking_ack": thinking_ack,
                 "openclaw_elapsed_ms": elapsed_ms(openclaw_started_at),
                 "total_elapsed_ms": elapsed_ms(started_at),
             },
@@ -994,6 +1046,7 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
                 },
             )
         except Exception as e:
+            thinking_ack = await maybe_speak_openclaw_thinking_ack()
             openclaw_started_at = time.monotonic()
             openclaw_result = await send_to_openclaw(text)
             conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
@@ -1010,6 +1063,7 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
                     "source": "local_memory_chat_fallback",
                     "error": str(e),
                     "actions_elapsed_ms": actions_elapsed_ms,
+                    "thinking_ack": thinking_ack,
                     "openclaw_elapsed_ms": elapsed_ms(openclaw_started_at),
                     "total_elapsed_ms": elapsed_ms(started_at),
                 },
@@ -1127,8 +1181,9 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             except Exception as e:
                 model_route["direct_reply_error"] = str(e)
 
-    openclaw_started_at = time.monotonic()
     openclaw_policy = resolve_openclaw_policy(model_route)
+    thinking_ack = await maybe_speak_openclaw_thinking_ack()
+    openclaw_started_at = time.monotonic()
     openclaw_result = await send_to_openclaw(text, policy=openclaw_policy)
     conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
     return {
@@ -1145,6 +1200,7 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             "router": model_route,
             "openclaw_policy": openclaw_policy,
             "actions_elapsed_ms": actions_elapsed_ms,
+            "thinking_ack": thinking_ack,
             "openclaw_elapsed_ms": elapsed_ms(openclaw_started_at),
             "total_elapsed_ms": elapsed_ms(started_at),
         },
@@ -1530,10 +1586,12 @@ async def send_text(req: SendTextRequest):
         if ORCHESTRATION_ENABLED:
             return await orchestrate_text(text)
 
+        thinking_ack = await maybe_speak_openclaw_thinking_ack()
         result = await send_to_openclaw(text)
         return {
             "status": "ok",
             "text": text,
+            "thinking_ack": thinking_ack,
             "openclaw": result,
         }
     except Exception as e:
@@ -1582,8 +1640,9 @@ async def voice(file: UploadFile = File(...)):
         if ORCHESTRATION_ENABLED:
             return await orchestrate_text(text)
 
+        thinking_ack = await maybe_speak_openclaw_thinking_ack()
         result = await send_to_openclaw(text)
-        return {"status": "ok", "text": text, "openclaw": result}
+        return {"status": "ok", "text": text, "thinking_ack": thinking_ack, "openclaw": result}
 
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))

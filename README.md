@@ -179,6 +179,10 @@ CASUAL_CHAT_TIMEOUT_SECONDS=8
 CASUAL_CHAT_MAX_HISTORY_MESSAGES=8
 MEMORY_DB_PATH=/home/node/.openclaw/interaction-bridge-memory.sqlite3
 OPENCLAW_SESSION_TUNING_ENABLED=false
+OPENCLAW_THINKING_ACK_ENABLED=true
+OPENCLAW_THINKING_ACK_TEXT=承知しました。少し考えますね。
+OPENCLAW_THINKING_ACK_EMOTION=happy
+OPENCLAW_THINKING_ACK_TIMEOUT_SECONDS=2
 ```
 
 `ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合は「ありがとう」「ただいま」「疲れた」などの小さな quick reply を即返答します。「前に話した」「覚えておいて」「調べて」のように OpenClaw が必要な語句は OpenClaw へ直行します。「さっき」「今の流れ」「最近の会話」のような直近履歴参照は LLM router を待たず `memory_chat` に入ります。それ以外だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。router がタイムアウトしても OpenClaw 必須語句でなければ direct casual chat にフォールバックします。軽い雑談は `quick_reply` または `memory_chat` として direct LLM が返答し、OpenClaw の memory / skill / persona / 深い推論が必要なものは OpenClaw へ渡します。
@@ -286,6 +290,10 @@ OpenClaw 自体を速くする案:
 | `夜は静かめの返事が好きです。短く覚えてください。` | `openclaw` / `local_openclaw_required` | 6〜24秒 | OpenClaw `agent.wait` と active-memory が大半 | memory / persona / skill を使えるが最も重い |
 
 現状の改善優先度は、普通の雑談で `LLM router` を待ちすぎないこと、OpenClaw ルートの active-memory と `agent.wait` を短くすることです。家電操作と local quick reply は十分に速く、直近履歴付き雑談も direct LLM だけなら 1〜2秒台に収まっています。
+
+`router timeout` は、`ORCHESTRATOR_TIMEOUT_SECONDS` 内に軽量 router LLM の応答が返らなかった場合に発生します。現在は 2.5秒で打ち切っており、OpenAI API の一時的な遅延、Docker/ネットワーク待ち、許可済み action 一覧を含む分類プロンプトの長さ、JSON mode の応答待ちが重なると起きます。timeout 時は OpenClaw 必須語句がなければ direct casual chat へ逃がしますが、router 待ち時間ぶんだけ遅くなります。
+
+OpenClaw に渡すルートは待ち時間が長くなりやすいため、`OPENCLAW_THINKING_ACK_ENABLED=true` の場合は OpenClaw へ送る直前に `OPENCLAW_THINKING_ACK_TEXT` を AITuber Kit に発話させます。これは体感待ち時間を短くするための相槌で、OpenClaw の最終応答は別途発話されます。
 
 ## 常時待受音声入力
 
