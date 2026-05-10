@@ -151,6 +151,7 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - Quiet rejected recordings should not call `speak_status`; spoken error prompts can feed back into the microphone and trigger more false wakes.
 - `VAD_START_FRAMES` and `MIN_SPEECH_SECONDS` are the main filters for post-wake noise being treated as a spoken command.
 - `LOG_TIMINGS=true` makes `voice-listener` print per-turn latency for capture, STT, OpenClaw, and total wake-to-response timing. Keep this on while tuning latency.
+- `interaction-bridge` returns `conversation.continue_listening=true` when the assistant asks a question or makes a proposal. `voice-listener` then waits for up to `FOLLOW_UP_RECORD_SECONDS` without requiring the wake word, capped by `FOLLOW_UP_MAX_TURNS`.
 
 ## Editing Guidance
 

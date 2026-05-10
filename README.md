@@ -181,7 +181,7 @@ MEMORY_DB_PATH=/home/node/.openclaw/interaction-bridge-memory.sqlite3
 OPENCLAW_SESSION_TUNING_ENABLED=false
 ```
 
-`ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合は「ありがとう」「ただいま」「疲れた」などの小さな quick reply を即返答します。「前に話した」「覚えておいて」「調べて」のように OpenClaw が必要な語句は OpenClaw へ直行します。「さっき」「今の流れ」「最近の会話」のような直近履歴参照は LLM router を待たず `memory_chat` に入ります。それ以外だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。軽い雑談は `quick_reply` または `memory_chat` として direct LLM が返答し、OpenClaw の memory / skill / persona / 深い推論が必要なものは OpenClaw へ渡します。
+`ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合は「ありがとう」「ただいま」「疲れた」などの小さな quick reply を即返答します。「前に話した」「覚えておいて」「調べて」のように OpenClaw が必要な語句は OpenClaw へ直行します。「さっき」「今の流れ」「最近の会話」のような直近履歴参照は LLM router を待たず `memory_chat` に入ります。それ以外だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。router がタイムアウトしても OpenClaw 必須語句でなければ direct casual chat にフォールバックします。軽い雑談は `quick_reply` または `memory_chat` として direct LLM が返答し、OpenClaw の memory / skill / persona / 深い推論が必要なものは OpenClaw へ渡します。
 
 安全上、router が自由な Home Assistant service を呼ぶことはありません。実行できるのは `ha-bridge /actions` に出てくる許可済み action だけです。
 
@@ -227,12 +227,27 @@ router は `home_action` / `quick_reply` / `memory_chat` / `openclaw` のよう�
 
 長期記憶の要約更新は `should_remember=true` の時だけ行います。単なる `memory_chat` は短期履歴を参照するだけで、安定した好みとしては保存しません。
 
+会話継続:
+
+`interaction-bridge` は返答が質問や提案で終わる場合、レスポンスに `conversation.continue_listening=true` を含めます。`voice-listener` はこのフラグを見ると wake word に戻らず、短時間だけ follow-up 発話を待ちます。
+
+```text
+FOLLOW_UP_ENABLED=true
+FOLLOW_UP_MAX_TURNS=2
+FOLLOW_UP_RECORD_SECONDS=8
+FOLLOW_UP_COOLDOWN_SECONDS=0.4
+```
+
+これにより、毎回 `Hey_Kemy` を言い直さずに短い会話ループを続けられます。
+
 OpenClaw 自体を速くする案:
 
 - router で簡単な依頼は `fastMode=true`、`thinkingLevel=off`、`reasoningLevel=off` に寄せる
 - 深い推論が必要な依頼だけ強いモデルや thinking を使う
 - 履歴参照が不要な依頼は別セッションや短い履歴のセッションへ逃がす
 - OpenClaw の `chat.send` は非同期 ack なので、必要なら「先に短い相槌を発話し、OpenClaw の本回答を待つ」体感速度改善も検討する
+
+現在の実験では、OpenClaw メインセッションを `gpt-5.5` から `gpt-4.1-mini` に切り替え、`thinkingLevel=off`、`fastMode=true`、`reasoningLevel=off` で低遅延側に寄せています。`gpt-4.1-nano` も試しましたが、現在の OpenClaw tool payload では `web_search_preview` 非対応のため通常 turn が失敗しました。
 
 ## 常時待受音声入力
 

@@ -76,6 +76,15 @@ LAST_WAV_PATH = os.getenv("LAST_WAV_PATH", "/tmp/voice-listener-last.wav").strip
 # 自然会話では長すぎるクールダウンは不自然なので短め推奨。
 COMMAND_COOLDOWN_SECONDS = float(os.getenv("COMMAND_COOLDOWN_SECONDS", "2.0"))
 FALSE_WAKE_COOLDOWN_SECONDS = float(os.getenv("FALSE_WAKE_COOLDOWN_SECONDS", "1.5"))
+FOLLOW_UP_ENABLED = os.getenv("FOLLOW_UP_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+FOLLOW_UP_MAX_TURNS = int(os.getenv("FOLLOW_UP_MAX_TURNS", "2"))
+FOLLOW_UP_RECORD_SECONDS = float(os.getenv("FOLLOW_UP_RECORD_SECONDS", "8"))
+FOLLOW_UP_COOLDOWN_SECONDS = float(os.getenv("FOLLOW_UP_COOLDOWN_SECONDS", "0.4"))
 
 WAKE_CONFIRM_CHUNKS = int(os.getenv("WAKE_CONFIRM_CHUNKS", "2"))
 WAKE_RESET_THRESHOLD = float(os.getenv("WAKE_RESET_THRESHOLD", str(WAKE_THRESHOLD * 0.75)))
@@ -370,18 +379,31 @@ def is_recent_repeat(
     return time.monotonic() - last_time < repeat_seconds
 
 
+def result_requests_follow_up(result: dict) -> bool:
+    conversation = result.get("conversation")
+    if not isinstance(conversation, dict):
+        openclaw = result.get("openclaw")
+        if isinstance(openclaw, dict):
+            conversation = openclaw.get("conversation")
+
+    if not isinstance(conversation, dict):
+        return False
+
+    return bool(conversation.get("continue_listening"))
+
+
 # ============================================================
 # Recording
 # ============================================================
 
-def record_utterance() -> tuple[np.ndarray, dict[str, float]]:
+def record_utterance(max_record_seconds: float = MAX_RECORD_SECONDS) -> tuple[np.ndarray, dict[str, float]]:
     """
     Wake Word検出後、VADで発話区間だけ録音する。
     発話開始前の少しの音もpaddingとして残す。
     """
     vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
 
-    max_frames = int(MAX_RECORD_SECONDS * 1000 / VAD_FRAME_MS)
+    max_frames = int(max_record_seconds * 1000 / VAD_FRAME_MS)
     end_silence_frames = int(END_SILENCE_SECONDS * 1000 / VAD_FRAME_MS)
     padding_frames = int(START_PADDING_SECONDS * 1000 / VAD_FRAME_MS)
 
@@ -651,6 +673,120 @@ def main():
                 last_text_time = time.monotonic()
 
                 reset_wake_state(wake_model)
+
+                follow_up_turns = 0
+                while (
+                    FOLLOW_UP_ENABLED
+                    and follow_up_turns < FOLLOW_UP_MAX_TURNS
+                    and isinstance(result, dict)
+                    and result_requests_follow_up(result)
+                ):
+                    follow_up_turns += 1
+                    print(
+                        f"[follow-up] waiting without wake word "
+                        f"({follow_up_turns}/{FOLLOW_UP_MAX_TURNS})..."
+                    )
+                    time.sleep(FOLLOW_UP_COOLDOWN_SECONDS)
+                    reset_wake_state(wake_model)
+
+                    follow_turn_started_at = time.monotonic()
+                    follow_record_started_at = time.monotonic()
+                    utterance, record_metrics = record_utterance(
+                        max_record_seconds=FOLLOW_UP_RECORD_SECONDS,
+                    )
+                    follow_record_finished_at = time.monotonic()
+                    duration, rms, peak = get_audio_stats(utterance)
+                    speech_seconds = get_vad_speech_seconds(utterance)
+
+                    print(
+                        f"[audio] follow-up duration={duration:.2f}s "
+                        f"speech={speech_seconds:.2f}s rms={rms:.4f} peak={peak:.4f}"
+                    )
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                        follow_wav_path = tmp.name
+
+                    follow_wav_started_at = time.monotonic()
+                    write_wav(follow_wav_path, utterance)
+
+                    if LAST_WAV_PATH:
+                        shutil.copyfile(follow_wav_path, LAST_WAV_PATH)
+                        print(f"[debug] saved last wav: {LAST_WAV_PATH}")
+                    follow_wav_finished_at = time.monotonic()
+
+                    print_timing(
+                        "follow-up-capture",
+                        [
+                            ("wait_for_speech", record_metrics["wait_for_speech"]),
+                            ("speech_wall", record_metrics["speech_wall"]),
+                            ("record_wall", follow_record_finished_at - follow_record_started_at),
+                            ("wav_write", follow_wav_finished_at - follow_wav_started_at),
+                        ],
+                    )
+
+                    try:
+                        if duration < MIN_RECORD_SECONDS:
+                            print("[follow-up] no speech; ending conversation loop")
+                            reject_utterance(follow_wav_path, wake_model)
+                            break
+
+                        if rms < MIN_AUDIO_RMS or peak < MIN_AUDIO_PEAK:
+                            print("[follow-up] too quiet; ending conversation loop")
+                            reject_utterance(follow_wav_path, wake_model)
+                            break
+
+                        if speech_seconds < MIN_SPEECH_SECONDS:
+                            print("[follow-up] too little speech; ending conversation loop")
+                            reject_utterance(follow_wav_path, wake_model)
+                            break
+
+                        print("[state] transcribing follow-up...")
+                        stt_started_at = time.monotonic()
+                        text = transcribe_wav(follow_wav_path)
+                        stt_finished_at = time.monotonic()
+                        text = normalize_spoken_text(text)
+
+                        print(f"[stt] follow-up: {text}")
+
+                        if should_ignore_transcript(text):
+                            print("[follow-up] ignored empty/noise transcription")
+                            break
+
+                        if is_recent_repeat(text, last_text, last_text_time):
+                            print("[follow-up] ignored recent repeated text")
+                            break
+
+                        print("[state] sending follow-up to OpenClaw...")
+                        openclaw_started_at = time.monotonic()
+                        result = send_text_to_openclaw(text)
+                        openclaw_finished_at = time.monotonic()
+                        print(f"[openclaw] follow-up: {result}")
+                        print_timing(
+                            "follow-up-turn",
+                            [
+                                ("record", follow_record_finished_at - follow_record_started_at),
+                                ("stt", stt_finished_at - stt_started_at),
+                                ("openclaw", openclaw_finished_at - openclaw_started_at),
+                                (
+                                    "wake_to_openclaw_done",
+                                    openclaw_finished_at - follow_turn_started_at,
+                                ),
+                            ],
+                        )
+
+                        last_text = text
+                        last_text_time = time.monotonic()
+                        reset_wake_state(wake_model)
+
+                    except Exception as e:
+                        print(f"[error] follow-up failed: {e}")
+                        break
+
+                    finally:
+                        try:
+                            os.remove(follow_wav_path)
+                        except OSError:
+                            pass
 
             except Exception as e:
                 print(f"[error] {e}")

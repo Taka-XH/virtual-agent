@@ -107,6 +107,8 @@ OPENCLAW_BALANCED_MODEL = os.getenv("OPENCLAW_BALANCED_MODEL", "").strip()
 OPENCLAW_DEEP_MODEL = os.getenv("OPENCLAW_DEEP_MODEL", "").strip()
 OPENCLAW_DEEP_THINKING_LEVEL = os.getenv("OPENCLAW_DEEP_THINKING_LEVEL", "").strip()
 
+FOLLOW_UP_LISTEN_SECONDS = float(os.getenv("FOLLOW_UP_LISTEN_SECONDS", "8"))
+
 
 # ============================================================
 # App
@@ -555,6 +557,7 @@ def local_openclaw_required(text: str) -> bool:
         "覚えてる",
         "覚えている",
         "覚えておいて",
+        "覚えてください",
         "忘れないで",
         "私の好み",
         "いつもの",
@@ -701,6 +704,26 @@ def normalize_bool(value: Any) -> bool:
     return bool(value)
 
 
+def build_conversation_state(reply: str | None, route: str) -> Dict[str, Any]:
+    text = (reply or "").strip()
+    if not text or route == "home_action":
+        return {
+            "continue_listening": False,
+            "listen_timeout_seconds": 0,
+            "reason": "no conversational follow-up",
+        }
+
+    question_markers = ("?", "？", "どうします", "どうしたい", "教えて", "聞かせて", "かな", "ですか")
+    proposal_markers = ("しましょうか", "しようか", "できますよ", "必要なら", "よければ")
+    continue_listening = any(marker in text for marker in question_markers + proposal_markers)
+
+    return {
+        "continue_listening": continue_listening,
+        "listen_timeout_seconds": FOLLOW_UP_LISTEN_SECONDS if continue_listening else 0,
+        "reason": "assistant asked or proposed a follow-up" if continue_listening else "assistant did not ask for follow-up",
+    }
+
+
 async def generate_casual_reply(
     text: str,
     *,
@@ -824,6 +847,7 @@ async def finish_direct_reply(
         "route": route,
         "text": text,
         "reply": reply,
+        "conversation": build_conversation_state(reply, route),
         "orchestration": {
             "source": source,
             "router": router,
@@ -872,10 +896,16 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
     except Exception as e:
         openclaw_started_at = time.monotonic()
         openclaw_result = await send_to_openclaw(text)
+        conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
         return {
             "status": "ok",
             "route": "openclaw",
             "text": text,
+            "conversation": conversation
+            if isinstance(conversation, dict)
+            else build_conversation_state(openclaw_result.get("assistant_text"), "openclaw")
+            if isinstance(openclaw_result, dict)
+            else build_conversation_state(None, "openclaw"),
             "orchestration": {
                 "source": "fallback",
                 "error": f"failed to load ha actions: {e}",
@@ -909,10 +939,16 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
     if local_openclaw_required(text):
         openclaw_started_at = time.monotonic()
         openclaw_result = await send_to_openclaw(text)
+        conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
         return {
             "status": "ok",
             "route": "openclaw",
             "text": text,
+            "conversation": conversation
+            if isinstance(conversation, dict)
+            else build_conversation_state(openclaw_result.get("assistant_text"), "openclaw")
+            if isinstance(openclaw_result, dict)
+            else build_conversation_state(None, "openclaw"),
             "orchestration": {
                 "source": "local_openclaw_required",
                 "actions_elapsed_ms": actions_elapsed_ms,
@@ -960,10 +996,16 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
         except Exception as e:
             openclaw_started_at = time.monotonic()
             openclaw_result = await send_to_openclaw(text)
+            conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
             return {
                 "status": "ok",
                 "route": "openclaw",
                 "text": text,
+                "conversation": conversation
+                if isinstance(conversation, dict)
+                else build_conversation_state(openclaw_result.get("assistant_text"), "openclaw")
+                if isinstance(openclaw_result, dict)
+                else build_conversation_state(None, "openclaw"),
                 "orchestration": {
                     "source": "local_memory_chat_fallback",
                     "error": str(e),
@@ -993,6 +1035,10 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             route = "memory_chat"
         action = model_route.get("action")
         confidence = float(model_route.get("confidence") or 0.0)
+        router_failed = confidence <= 0 and (
+            "orchestrator model failed" in str(model_route.get("reason") or "")
+            or "orchestrator returned non-json" in str(model_route.get("reason") or "")
+        )
         if (
             route == "home_action"
             and isinstance(action, str)
@@ -1063,13 +1109,37 @@ async def orchestrate_text(text: str) -> Dict[str, Any]:
             except Exception as e:
                 model_route["direct_reply_error"] = str(e)
 
+        if route == "memory_chat" and router_failed:
+            try:
+                generated = await generate_casual_reply(text, route=route, router=model_route)
+                return await finish_direct_reply(
+                    text,
+                    route=route,
+                    reply=generated["reply"],
+                    router=model_route,
+                    source="llm_router_timeout_direct_chat",
+                    started_at=started_at,
+                    extra={
+                        "actions_elapsed_ms": actions_elapsed_ms,
+                        "casual_chat": generated,
+                    },
+                )
+            except Exception as e:
+                model_route["direct_reply_error"] = str(e)
+
     openclaw_started_at = time.monotonic()
     openclaw_policy = resolve_openclaw_policy(model_route)
     openclaw_result = await send_to_openclaw(text, policy=openclaw_policy)
+    conversation = openclaw_result.get("conversation") if isinstance(openclaw_result, dict) else None
     return {
         "status": "ok",
         "route": "openclaw",
         "text": text,
+        "conversation": conversation
+        if isinstance(conversation, dict)
+        else build_conversation_state(openclaw_result.get("assistant_text"), "openclaw")
+        if isinstance(openclaw_result, dict)
+        else build_conversation_state(None, "openclaw"),
         "orchestration": {
             "source": "llm_router" if model_route else "fallback",
             "router": model_route,
@@ -1437,6 +1507,7 @@ async def send_to_openclaw(message: str, policy: Dict[str, Any] | None = None) -
 
         if assistant_text:
             send_res["assistant_text"] = assistant_text
+            send_res["conversation"] = build_conversation_state(assistant_text, "openclaw")
 
         if openclaw_tuning_result:
             send_res["openclaw_tuning"] = openclaw_tuning_result
