@@ -5,10 +5,12 @@ import tempfile
 import base64
 import hashlib
 import time
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List
 
 import websockets
+import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
 from openai import OpenAI
@@ -59,6 +61,24 @@ AITUBER_WS = os.getenv("AITUBER_WS", "ws://host.docker.internal:8000/ws")
 OPENCLAW_TIMEOUT_SECONDS = float(os.getenv("OPENCLAW_TIMEOUT_SECONDS", "60"))
 OPENCLAW_REPLY_TIMEOUT_SECONDS = float(os.getenv("OPENCLAW_REPLY_TIMEOUT_SECONDS", "45"))
 
+# Lightweight orchestration for the current voice-listener path.
+# Obvious home actions can skip the full OpenClaw agent run.
+ORCHESTRATION_ENABLED = os.getenv("ORCHESTRATION_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ORCHESTRATOR_LLM_ENABLED = os.getenv("ORCHESTRATOR_LLM_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+ORCHESTRATOR_MODEL = os.getenv("ORCHESTRATOR_MODEL", "gpt-4o-mini").strip()
+ORCHESTRATOR_TIMEOUT_SECONDS = float(os.getenv("ORCHESTRATOR_TIMEOUT_SECONDS", "3"))
+HA_BRIDGE_URL = os.getenv("HA_BRIDGE_URL", "http://ha-bridge:8088").rstrip("/")
+
 
 # ============================================================
 # App
@@ -100,6 +120,10 @@ def health():
         "aituber_ws": AITUBER_WS,
         "stt_model": STT_MODEL,
         "openai_api_key_configured": bool(OPENAI_API_KEY),
+        "orchestration_enabled": ORCHESTRATION_ENABLED,
+        "orchestrator_llm_enabled": ORCHESTRATOR_LLM_ENABLED,
+        "orchestrator_model": ORCHESTRATOR_MODEL,
+        "ha_bridge_url": HA_BRIDGE_URL,
     }
 
 
@@ -304,6 +328,242 @@ async def speak(req: SpeakRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# ============================================================
+# Orchestration
+# ============================================================
+
+def elapsed_ms(started_at: float) -> int:
+    return int((time.monotonic() - started_at) * 1000)
+
+
+async def fetch_ha_actions() -> Dict[str, Any]:
+    async with httpx.AsyncClient(timeout=5) as client:
+        response = await client.get(f"{HA_BRIDGE_URL}/actions")
+        response.raise_for_status()
+        data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
+async def run_ha_action(action_name: str) -> Dict[str, Any]:
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(f"{HA_BRIDGE_URL}/run/{action_name}")
+        response.raise_for_status()
+        data = response.json()
+    return data if isinstance(data, dict) else {"status": "ok"}
+
+
+def normalize_japanese_command(text: str) -> str:
+    return (
+        text.strip()
+        .replace("　", "")
+        .replace(" ", "")
+        .replace("ライト", "電気")
+        .replace("照明", "電気")
+    )
+
+
+def local_home_action_match(text: str, actions: Dict[str, Any]) -> str | None:
+    """
+    Very small deterministic fast path for obvious home actions.
+    Ambiguous requests fall through to the LLM/router or OpenClaw.
+    """
+    normalized = normalize_japanese_command(text)
+    if not normalized:
+        return None
+
+    room_matches = {
+        "bathroom": any(word in normalized for word in ("洗面所", "浴室", "お風呂", "風呂場")),
+    }
+    turn_on = any(word in normalized for word in ("つけて", "付けて", "点けて", "オン", "on"))
+    turn_off = any(word in normalized for word in ("消して", "消す", "けして", "オフ", "off"))
+    light = any(word in normalized for word in ("電気", "ライト", "照明"))
+
+    if room_matches["bathroom"] and (light or "bathroom_light" in ",".join(actions.keys())):
+        if turn_on and "bathroom_light_on" in actions:
+            return "bathroom_light_on"
+        if turn_off and "bathroom_light_off" in actions:
+            return "bathroom_light_off"
+
+    return None
+
+
+def parse_orchestrator_json(raw_text: str) -> Dict[str, Any] | None:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+    return data if isinstance(data, dict) else None
+
+
+async def classify_with_orchestrator_model(
+    text: str,
+    actions: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    if not ORCHESTRATOR_LLM_ENABLED or openai_client is None:
+        return None
+
+    allowed_actions = {
+        name: {
+            "description": action.get("description"),
+            "domain": action.get("domain"),
+            "service": action.get("service"),
+            "entity_id": action.get("entity_id"),
+        }
+        for name, action in actions.items()
+        if isinstance(action, dict)
+    }
+    prompt = (
+        "あなたは家庭内AIの低遅延オーケストレーターです。"
+        "ユーザー入力を家電操作か通常会話かに分類してください。"
+        "許可済み家電操作に明確に一致する場合だけ home_action にしてください。"
+        "曖昧、相談、雑談、質問、自然会話は casual_talk にしてください。"
+        "出力はJSONのみです。"
+    )
+
+    started_at = time.monotonic()
+    try:
+        response = await asyncio.to_thread(
+            openai_client.chat.completions.create,
+            model=ORCHESTRATOR_MODEL,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "text": text,
+                            "allowed_actions": allowed_actions,
+                            "schema": {
+                                "route": "home_action | casual_talk | clarification",
+                                "action": "allowed action name or null",
+                                "confidence": "0.0-1.0",
+                                "reason": "short Japanese reason",
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            timeout=ORCHESTRATOR_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        return {
+            "route": "casual_talk",
+            "action": None,
+            "confidence": 0.0,
+            "reason": f"orchestrator model failed: {e}",
+            "elapsed_ms": elapsed_ms(started_at),
+        }
+
+    content = response.choices[0].message.content if response.choices else ""
+    parsed = parse_orchestrator_json(content or "")
+    if not parsed:
+        return {
+            "route": "casual_talk",
+            "action": None,
+            "confidence": 0.0,
+            "reason": "orchestrator returned non-json",
+            "elapsed_ms": elapsed_ms(started_at),
+        }
+
+    parsed["elapsed_ms"] = elapsed_ms(started_at)
+    return parsed
+
+
+async def orchestrate_text(text: str) -> Dict[str, Any]:
+    started_at = time.monotonic()
+    try:
+        actions = await fetch_ha_actions()
+    except Exception as e:
+        openclaw_started_at = time.monotonic()
+        openclaw_result = await send_to_openclaw(text)
+        return {
+            "status": "ok",
+            "route": "openclaw",
+            "text": text,
+            "orchestration": {
+                "source": "fallback",
+                "error": f"failed to load ha actions: {e}",
+                "openclaw_elapsed_ms": elapsed_ms(openclaw_started_at),
+                "total_elapsed_ms": elapsed_ms(started_at),
+            },
+            "openclaw": openclaw_result,
+        }
+
+    actions_elapsed_ms = elapsed_ms(started_at)
+
+    local_action = local_home_action_match(text, actions)
+    if local_action:
+        run_started_at = time.monotonic()
+        ha_result = await run_ha_action(local_action)
+        return {
+            "status": "ok",
+            "route": "home_action",
+            "text": text,
+            "orchestration": {
+                "source": "local_rule",
+                "action": local_action,
+                "confidence": 1.0,
+                "actions_elapsed_ms": actions_elapsed_ms,
+                "ha_elapsed_ms": elapsed_ms(run_started_at),
+                "total_elapsed_ms": elapsed_ms(started_at),
+            },
+            "ha_bridge": ha_result,
+        }
+
+    model_route = await classify_with_orchestrator_model(text, actions)
+    if model_route:
+        route = str(model_route.get("route") or "casual_talk")
+        action = model_route.get("action")
+        confidence = float(model_route.get("confidence") or 0.0)
+        if (
+            route == "home_action"
+            and isinstance(action, str)
+            and action in actions
+            and confidence >= 0.75
+        ):
+            run_started_at = time.monotonic()
+            ha_result = await run_ha_action(action)
+            return {
+                "status": "ok",
+                "route": "home_action",
+                "text": text,
+                "orchestration": {
+                    **model_route,
+                    "source": "llm_router",
+                    "actions_elapsed_ms": actions_elapsed_ms,
+                    "ha_elapsed_ms": elapsed_ms(run_started_at),
+                    "total_elapsed_ms": elapsed_ms(started_at),
+                },
+                "ha_bridge": ha_result,
+            }
+
+    openclaw_started_at = time.monotonic()
+    openclaw_result = await send_to_openclaw(text)
+    return {
+        "status": "ok",
+        "route": "openclaw",
+        "text": text,
+        "orchestration": {
+            "source": "llm_router" if model_route else "fallback",
+            "router": model_route,
+            "actions_elapsed_ms": actions_elapsed_ms,
+            "openclaw_elapsed_ms": elapsed_ms(openclaw_started_at),
+            "total_elapsed_ms": elapsed_ms(started_at),
+        },
+        "openclaw": openclaw_result,
+    }
 
 
 # ============================================================
@@ -639,8 +899,8 @@ async def send_to_openclaw(message: str) -> Dict[str, Any]:
 @app.post("/send-text")
 async def send_text(req: SendTextRequest):
     """
-    テキストを余計に加工せず、そのままOpenClawへ送る。
-    会話の自然さ、記憶、人格、HA操作判断はOpenClaw側に任せる。
+    通常はテキストをOpenClawへ送る。
+    ORCHESTRATION_ENABLED=true の場合は、明確な家電操作だけfast pathで処理する。
     """
     text = req.text.strip()
 
@@ -648,6 +908,9 @@ async def send_text(req: SendTextRequest):
         raise HTTPException(status_code=400, detail="text is empty")
 
     try:
+        if ORCHESTRATION_ENABLED:
+            return await orchestrate_text(text)
+
         result = await send_to_openclaw(text)
         return {
             "status": "ok",

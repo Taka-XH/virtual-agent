@@ -147,11 +147,36 @@ http://127.0.0.1:18089
 
 1. ブラウザで音声を録音
 2. `interaction-bridge` が音声を文字起こし
-3. 文字起こしされたテキストを OpenClaw に送信
-4. OpenClaw がカジュアルトークか家電操作かを判断
-5. カジュアルトークなら OpenClaw の応答を AITuber Kit へ発話
-6. 家電操作なら `ha-bridge` 経由で許可済みの Home Assistant 操作を実行
+3. `ORCHESTRATION_ENABLED=true` なら、明確な家電操作だけ `ha-bridge` へ fast path で送信
+4. fast path できない入力は OpenClaw に送信
+5. OpenClaw がカジュアルトークか家電操作かを判断
+6. カジュアルトークなら OpenClaw の応答を AITuber Kit へ発話
 7. `/speak` が呼ばれた場合は、その発話を優先して二重発話を避ける
+
+## オーケストレーション実験
+
+`experiment/voice-listener-metrics` ブランチでは、`interaction-bridge` に軽量オーケストレーションを追加しています。
+
+目的:
+
+```text
+明確な家電操作 -> 低遅延で ha-bridge
+雑談・相談・曖昧な依頼 -> 従来どおり OpenClaw
+```
+
+設定:
+
+```text
+ORCHESTRATION_ENABLED=false
+ORCHESTRATOR_LLM_ENABLED=true
+ORCHESTRATOR_MODEL=gpt-4o-mini
+ORCHESTRATOR_TIMEOUT_SECONDS=3
+HA_BRIDGE_URL=http://ha-bridge:8088
+```
+
+`ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。それ以外は OpenClaw へ渡します。
+
+安全上、router が自由な Home Assistant service を呼ぶことはありません。実行できるのは `ha-bridge /actions` に出てくる許可済み action だけです。
 
 ## 常時待受音声入力
 

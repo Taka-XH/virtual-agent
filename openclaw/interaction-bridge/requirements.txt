@@ -5,3 +5,4 @@ openai
 websockets
 pydantic
 cryptography
+httpx

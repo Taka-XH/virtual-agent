@@ -129,7 +129,9 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - `openclaw/docker-compose.override.yml` contains local integration settings.
 - `OPENCLAW_AGENT_RUNTIME=pi` is intentional. It avoids the missing `codex` harness error in this Docker setup.
 - `ha-bridge` calls `interaction-bridge /speak` after a successful Home Assistant action. This makes speech reliable even when the OpenClaw model does not follow the skill instruction to call `/speak`.
-- `interaction-bridge` sends raw STT/text to OpenClaw. OpenClaw should decide whether the input is casual talk or a home action.
+- `interaction-bridge` can optionally orchestrate STT/text before OpenClaw when `ORCHESTRATION_ENABLED=true`.
+- The orchestration fast path may call only action names returned by `ha-bridge /actions`; it must never construct arbitrary Home Assistant service calls.
+- Obvious home actions can go directly to `ha-bridge`. Casual talk, ambiguous input, and low-confidence classifications must still go to OpenClaw.
 - After `chat.send`, `interaction-bridge` waits for the OpenClaw run and reads the latest assistant message. If `/speak` was not called during the run, it sends that assistant text to AITuber Kit. If `/speak` was already called, it skips auto-speech to avoid duplicate character speech.
 - `interaction-bridge` signs into OpenClaw as a paired device and requests operator scopes.
 - Docker services reach the host through `host.docker.internal`.
