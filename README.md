@@ -171,7 +171,7 @@ http://127.0.0.1:18089
 ORCHESTRATION_ENABLED=false
 ORCHESTRATOR_LLM_ENABLED=true
 ORCHESTRATOR_MODEL=gpt-4o-mini
-ORCHESTRATOR_TIMEOUT_SECONDS=2.5
+ORCHESTRATOR_TIMEOUT_SECONDS=3.5
 HA_BRIDGE_URL=http://ha-bridge:8088
 CASUAL_CHAT_ENABLED=true
 CASUAL_CHAT_MODEL=gpt-4o-mini
@@ -291,7 +291,7 @@ OpenClaw 自体を速くする案:
 
 現状の改善優先度は、普通の雑談で `LLM router` を待ちすぎないこと、OpenClaw ルートの active-memory と `agent.wait` を短くすることです。家電操作と local quick reply は十分に速く、直近履歴付き雑談も direct LLM だけなら 1〜2秒台に収まっています。
 
-`router timeout` は、`ORCHESTRATOR_TIMEOUT_SECONDS` 内に軽量 router LLM の応答が返らなかった場合に発生します。現在は 2.5秒で打ち切っており、OpenAI API の一時的な遅延、Docker/ネットワーク待ち、許可済み action 一覧を含む分類プロンプトの長さ、JSON mode の応答待ちが重なると起きます。timeout 時は OpenClaw 必須語句がなければ direct casual chat へ逃がしますが、router 待ち時間ぶんだけ遅くなります。
+`router timeout` は、`ORCHESTRATOR_TIMEOUT_SECONDS` 内に軽量 router LLM の応答が返らなかった場合に発生します。現在は 3.5秒で打ち切っており、OpenAI API の一時的な遅延、Docker/ネットワーク待ち、許可済み action 一覧を含む分類プロンプトの長さ、JSON mode の応答待ちが重なると起きます。timeout 時は OpenClaw 必須語句がなければ direct casual chat へ逃がしますが、router 待ち時間ぶんだけ遅くなります。
 
 OpenClaw に渡すルートは待ち時間が長くなりやすいため、`OPENCLAW_THINKING_ACK_ENABLED=true` の場合は OpenClaw へ送る直前に `OPENCLAW_THINKING_ACK_TEXT` を AITuber Kit に発話させます。これは体感待ち時間を短くするための相槌で、OpenClaw の最終応答は別途発話されます。
 
