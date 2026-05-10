@@ -216,6 +216,24 @@ MIN_SPEECH_SECONDS: STT に送る最低音声判定時間
 FALSE_WAKE_COOLDOWN_SECONDS: 雑音として弾いた後の短い待機時間
 ```
 
+遅延計測:
+
+```text
+[timing] capture wake_to_record=0.00s wait_for_speech=0.28s speech_wall=2.10s record_wall=3.00s wav_write=0.01s
+[timing] turn record=3.00s stt=1.20s openclaw=12.40s wake_to_openclaw_done=16.70s
+```
+
+主な見方:
+
+```text
+wait_for_speech: Wake word 後、発話開始と判定されるまでの時間
+speech_wall: VAD上の発話区間の壁時計時間
+record_wall: Wake後の録音全体。END_SILENCE_SECONDS が効く
+stt: OpenAI STT API の時間
+openclaw: interaction-bridge /send-text から OpenClaw 応答完了までの時間
+wake_to_openclaw_done: Wake検出から OpenClaw 応答完了までの合計
+```
+
 STT 精度に影響するため、`get_audio_samples` は余った音声サンプルを捨てずに次回へ持ち越します。ここを壊すと録音が不自然になり、認識精度が大きく落ちます。
 
 ## 手動テスト

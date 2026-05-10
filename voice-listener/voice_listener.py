@@ -85,6 +85,12 @@ WAKE_DEBOUNCE_SECONDS = float(os.getenv("WAKE_DEBOUNCE_SECONDS", "2.0"))
 
 # 同じ発話が二重送信されることだけ防ぐ。自然会話用なので短め。
 REPEAT_TEXT_IGNORE_SECONDS = float(os.getenv("REPEAT_TEXT_IGNORE_SECONDS", "3.0"))
+LOG_TIMINGS = os.getenv("LOG_TIMINGS", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
@@ -208,6 +214,22 @@ def get_audio_samples(num_samples: int) -> np.ndarray:
         audio_remainder = audio[num_samples:]
 
     return audio[:num_samples]
+
+
+def seconds_since(started_at: float, ended_at: float | None = None) -> float:
+    return (ended_at or time.monotonic()) - started_at
+
+
+def format_seconds(value: float) -> str:
+    return f"{value:.2f}s"
+
+
+def print_timing(label: str, phases: list[tuple[str, float]]):
+    if not LOG_TIMINGS:
+        return
+
+    joined = " ".join(f"{name}={format_seconds(duration)}" for name, duration in phases)
+    print(f"[timing] {label} {joined}")
 
 
 # ============================================================
@@ -352,7 +374,7 @@ def is_recent_repeat(
 # Recording
 # ============================================================
 
-def record_utterance() -> np.ndarray:
+def record_utterance() -> tuple[np.ndarray, dict[str, float]]:
     """
     Wake Word検出後、VADで発話区間だけ録音する。
     発話開始前の少しの音もpaddingとして残す。
@@ -369,6 +391,9 @@ def record_utterance() -> np.ndarray:
     triggered = False
     silence_count = 0
     speech_streak = 0
+    record_started_at = time.monotonic()
+    speech_started_at: float | None = None
+    speech_ended_at: float | None = None
 
     print("[state] listening for utterance...")
 
@@ -390,6 +415,7 @@ def record_utterance() -> np.ndarray:
 
             if speech_streak >= VAD_START_FRAMES:
                 triggered = True
+                speech_started_at = time.monotonic()
                 recorded.extend(ring_buffer)
                 ring_buffer.clear()
                 recorded.append(frame_int16)
@@ -404,13 +430,28 @@ def record_utterance() -> np.ndarray:
                 silence_count += 1
 
             if silence_count >= end_silence_frames:
+                speech_ended_at = time.monotonic()
                 print("[state] speech ended")
                 break
 
     if not recorded:
-        return np.array([], dtype=np.int16)
+        return np.array([], dtype=np.int16), {
+            "wait_for_speech": seconds_since(record_started_at),
+            "record_wall": seconds_since(record_started_at),
+            "speech_wall": 0.0,
+        }
 
-    return np.concatenate(recorded)
+    record_finished_at = time.monotonic()
+    speech_wall = (
+        (speech_ended_at or record_finished_at) - speech_started_at
+        if speech_started_at
+        else 0.0
+    )
+    return np.concatenate(recorded), {
+        "wait_for_speech": (speech_started_at or record_finished_at) - record_started_at,
+        "record_wall": record_finished_at - record_started_at,
+        "speech_wall": speech_wall,
+    }
 
 
 # ============================================================
@@ -494,6 +535,7 @@ def main():
             wake_candidate_name = ""
             wake_candidate_score = 0.0
             wake_confirm_count = 0
+            turn_started_at = time.monotonic()
 
             # Wakeモデルの内部状態だけリセット。
             # 音声キューを捨てると、Wake Word直後の発話冒頭が欠ける場合がある。
@@ -504,7 +546,9 @@ def main():
                 time.sleep(1.0)
                 reset_wake_state(wake_model)
 
-            utterance = record_utterance()
+            record_started_at = time.monotonic()
+            utterance, record_metrics = record_utterance()
+            record_finished_at = time.monotonic()
             duration, rms, peak = get_audio_stats(utterance)
             speech_seconds = get_vad_speech_seconds(utterance)
 
@@ -516,11 +560,24 @@ def main():
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                 wav_path = tmp.name
 
+            wav_started_at = time.monotonic()
             write_wav(wav_path, utterance)
 
             if LAST_WAV_PATH:
                 shutil.copyfile(wav_path, LAST_WAV_PATH)
                 print(f"[debug] saved last wav: {LAST_WAV_PATH}")
+            wav_finished_at = time.monotonic()
+
+            print_timing(
+                "capture",
+                [
+                    ("wake_to_record", record_started_at - turn_started_at),
+                    ("wait_for_speech", record_metrics["wait_for_speech"]),
+                    ("speech_wall", record_metrics["speech_wall"]),
+                    ("record_wall", record_finished_at - record_started_at),
+                    ("wav_write", wav_finished_at - wav_started_at),
+                ],
+            )
 
             if duration < MIN_RECORD_SECONDS:
                 print("[warn] utterance too short")
@@ -544,22 +601,51 @@ def main():
 
             try:
                 print("[state] transcribing...")
+                stt_started_at = time.monotonic()
                 text = transcribe_wav(wav_path)
+                stt_finished_at = time.monotonic()
                 text = normalize_spoken_text(text)
 
                 print(f"[stt] {text}")
 
                 if should_ignore_transcript(text):
                     print("[warn] ignored empty/noise transcription")
+                    print_timing(
+                        "turn",
+                        [
+                            ("record", record_finished_at - record_started_at),
+                            ("stt", stt_finished_at - stt_started_at),
+                            ("wake_to_reject", stt_finished_at - turn_started_at),
+                        ],
+                    )
                     continue
 
                 if is_recent_repeat(text, last_text, last_text_time):
                     print("[warn] ignored recent repeated text")
+                    print_timing(
+                        "turn",
+                        [
+                            ("record", record_finished_at - record_started_at),
+                            ("stt", stt_finished_at - stt_started_at),
+                            ("wake_to_reject", stt_finished_at - turn_started_at),
+                        ],
+                    )
                     continue
 
                 print("[state] sending to OpenClaw...")
+                openclaw_started_at = time.monotonic()
                 result = send_text_to_openclaw(text)
+                openclaw_finished_at = time.monotonic()
                 print(f"[openclaw] {result}")
+                print_timing(
+                    "turn",
+                    [
+                        ("record", record_finished_at - record_started_at),
+                        ("stt", stt_finished_at - stt_started_at),
+                        ("openclaw", openclaw_finished_at - openclaw_started_at),
+                        ("wake_to_openclaw_done", openclaw_finished_at - turn_started_at),
+                    ],
+                )
 
                 last_text = text
                 last_text_time = time.monotonic()

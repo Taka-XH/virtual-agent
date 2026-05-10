@@ -141,6 +141,7 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - Keep `STT_PROMPT` neutral. Strong candidate prompts can turn low-level noise into a plausible smart-home command.
 - Quiet rejected recordings should not call `speak_status`; spoken error prompts can feed back into the microphone and trigger more false wakes.
 - `VAD_START_FRAMES` and `MIN_SPEECH_SECONDS` are the main filters for post-wake noise being treated as a spoken command.
+- `LOG_TIMINGS=true` makes `voice-listener` print per-turn latency for capture, STT, OpenClaw, and total wake-to-response timing. Keep this on while tuning latency.
 
 ## Editing Guidance
 
