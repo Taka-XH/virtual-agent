@@ -178,6 +178,23 @@ HA_BRIDGE_URL=http://ha-bridge:8088
 
 安全上、router が自由な Home Assistant service を呼ぶことはありません。実行できるのは `ha-bridge /actions` に出てくる許可済み action だけです。
 
+実験ブランチで有効化して起動する例:
+
+```bash
+cd /Users/shin/work/V_agent_voice-listener-metrics/openclaw
+ORCHESTRATION_ENABLED=true docker compose up -d --no-deps --build interaction-bridge
+```
+
+動作確認:
+
+```bash
+curl -X POST http://127.0.0.1:18089/send-text \
+  -H "Content-Type: application/json" \
+  -d '{"text":"洗面所の電気をつけて"}'
+```
+
+期待される応答は `route: "home_action"` です。雑談の場合は `route: "openclaw"` になり、OpenClaw 側で自然応答します。
+
 ## 常時待受音声入力
 
 `voice-listener` を使うと、ブラウザ録音ボタンを押さずにローカルマイクで wake word 待受できます。

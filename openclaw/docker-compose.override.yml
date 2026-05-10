@@ -1,0 +1,39 @@
+services:
+  openclaw-gateway:
+    environment:
+      OPENCLAW_AGENT_RUNTIME: pi
+    tmpfs:
+      - /tmp:mode=1777
+
+  ha-bridge:
+    build:
+      context: ./ha-bridge
+    env_file:
+      - .env
+    environment:
+      SPEAK_URL: http://interaction-bridge:8090/speak
+      SPEAK_ENABLED: "1"
+    ports:
+      - "18088:8088"
+    restart: unless-stopped
+
+  interaction-bridge:
+    build:
+      context: ./interaction-bridge
+    env_file:
+      - .env
+    environment:
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      ORCHESTRATION_ENABLED: "${ORCHESTRATION_ENABLED:-false}"
+      ORCHESTRATOR_LLM_ENABLED: "${ORCHESTRATOR_LLM_ENABLED:-true}"
+      ORCHESTRATOR_MODEL: "${ORCHESTRATOR_MODEL:-gpt-4o-mini}"
+      ORCHESTRATOR_TIMEOUT_SECONDS: "${ORCHESTRATOR_TIMEOUT_SECONDS:-3}"
+      HA_BRIDGE_URL: "${HA_BRIDGE_URL:-http://ha-bridge:8088}"
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+    ports:
+      - "18089:8090"
+    restart: unless-stopped
+    depends_on:
+      - openclaw-gateway
+      - ha-bridge
