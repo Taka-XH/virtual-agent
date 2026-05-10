@@ -225,6 +225,30 @@ router は `home_action` / `quick_reply` / `memory_chat` / `openclaw` のよう�
 - `memory_chat`: 「さっき」「今の流れ」「最近の会話」など、直近の会話履歴だけで十分な雑談
 - `openclaw`: 「前に話した件」「いつもの設定」「覚えておいて」「調べて」「複数 tool が必要」など、OpenClaw の memory / skill / persona を使うべきもの
 
+分岐順:
+
+```text
+1. local_home_action_match
+   明確な家電操作なら ha-bridge
+
+2. local_openclaw_required
+   永続記憶、過去の好み、調査、予定などは OpenClaw
+
+3. local_memory_chat_requested
+   「さっき」「今の流れ」「直近」などは SQLite 直近履歴 + direct LLM
+
+4. local_quick_reply
+   ごく短い定型応答だけ即返答
+
+5. LLM router
+   それ以外を home_action / quick_reply / memory_chat / openclaw に分類
+
+6. router timeout fallback
+   OpenClaw 必須でなければ direct casual chat
+```
+
+`memory_chat` と普通の雑談の違いは、直近履歴を必ず読むかどうかです。`memory_chat` は「さっき」「今の流れ」など、履歴なしだと不自然になりやすい入力を対象にします。普通の雑談はまず LLM router に判断させ、router が間に合わない場合は direct casual chat に逃がします。
+
 長期記憶の要約更新は `should_remember=true` の時だけ行います。単なる `memory_chat` は短期履歴を参照するだけで、安定した好みとしては保存しません。
 
 会話継続:
@@ -248,6 +272,20 @@ OpenClaw 自体を速くする案:
 - OpenClaw の `chat.send` は非同期 ack なので、必要なら「先に短い相槌を発話し、OpenClaw の本回答を待つ」体感速度改善も検討する
 
 現在の実験では、OpenClaw メインセッションを `gpt-5.5` から `gpt-4.1-mini` に切り替え、`thinkingLevel=off`、`fastMode=true`、`reasoningLevel=off` で低遅延側に寄せています。`gpt-4.1-nano` も試しましたが、現在の OpenClaw tool payload では `web_search_preview` 非対応のため通常 turn が失敗しました。
+
+### 現在の実測レイテンシ
+
+2026-05-11 に `interaction-bridge /send-text` を `curl` で測定した値です。これはテキストが `interaction-bridge` に届いた後の時間なので、`voice-listener` を使う場合は wake word 検出、録音待ち、STT の時間が別途加わります。
+
+| 入力例 | route / source | 合計 | 主な内訳 | コメント |
+| --- | --- | ---: | --- | --- |
+| `洗面所の電気をつけて` | `home_action` / `local_rule` | 1.34秒 | `ha_elapsed_ms=1291`, `actions_elapsed_ms=36` | Home Assistant 操作と発話連携が主な待ち時間 |
+| `短い一言をください` | `quick_reply` / `local_quick_reply` | 0.07秒 | `speak_elapsed_ms=27`, `total_elapsed_ms=58` | LLM を使わない最速ルート |
+| `さっきの一言を踏まえて、もう少しだけ優しく言って` | `memory_chat` / `local_memory_chat` | 1.38秒 | direct LLM `elapsed_ms=1337`, 履歴8件 | 直近履歴付き雑談は direct LLM が主な待ち時間 |
+| `晩ごはん何にしようかな。私に質問を一つ返して` | `memory_chat` / `llm_router_timeout_direct_chat` | 5.40秒 | router timeout 2.50秒 + direct LLM 2.85秒 | 普通の雑談で router がタイムアウトすると遅い |
+| `夜は静かめの返事が好きです。短く覚えてください。` | `openclaw` / `local_openclaw_required` | 6〜24秒 | OpenClaw `agent.wait` と active-memory が大半 | memory / persona / skill を使えるが最も重い |
+
+現状の改善優先度は、普通の雑談で `LLM router` を待ちすぎないこと、OpenClaw ルートの active-memory と `agent.wait` を短くすることです。家電操作と local quick reply は十分に速く、直近履歴付き雑談も direct LLM だけなら 1〜2秒台に収まっています。
 
 ## 常時待受音声入力
 
