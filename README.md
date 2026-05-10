@@ -147,10 +147,10 @@ http://127.0.0.1:18089
 
 1. ブラウザで音声を録音
 2. `interaction-bridge` が音声を文字起こし
-3. `ORCHESTRATION_ENABLED=true` なら、明確な家電操作だけ `ha-bridge` へ fast path で送信
-4. fast path できない入力は OpenClaw に送信
-5. OpenClaw がカジュアルトークか家電操作かを判断
-6. カジュアルトークなら OpenClaw の応答を AITuber Kit へ発話
+3. `ORCHESTRATION_ENABLED=true` なら、router が実行経路を判断
+4. 明確な家電操作は `ha-bridge` へ fast path で送信
+5. 軽い雑談は `interaction-bridge` が direct LLM で短く返答し、AITuber Kit へ発話
+6. OpenClaw の memory / skill / persona / 深い推論が必要な入力は OpenClaw に送信
 7. `/speak` が呼ばれた場合は、その発話を優先して二重発話を避ける
 
 ## オーケストレーション実験
@@ -161,7 +161,8 @@ http://127.0.0.1:18089
 
 ```text
 明確な家電操作 -> 低遅延で ha-bridge
-雑談・相談・曖昧な依頼 -> 従来どおり OpenClaw
+軽い雑談 -> local quick reply / direct casual chat
+記憶・skill・深い推論が必要な依頼 -> OpenClaw
 ```
 
 設定:
@@ -172,9 +173,15 @@ ORCHESTRATOR_LLM_ENABLED=true
 ORCHESTRATOR_MODEL=gpt-4o-mini
 ORCHESTRATOR_TIMEOUT_SECONDS=3
 HA_BRIDGE_URL=http://ha-bridge:8088
+CASUAL_CHAT_ENABLED=true
+CASUAL_CHAT_MODEL=gpt-4o-mini
+CASUAL_CHAT_TIMEOUT_SECONDS=8
+CASUAL_CHAT_MAX_HISTORY_MESSAGES=8
+MEMORY_DB_PATH=/home/node/.openclaw/interaction-bridge-memory.sqlite3
+OPENCLAW_SESSION_TUNING_ENABLED=false
 ```
 
-`ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。それ以外は OpenClaw へ渡します。
+`ORCHESTRATION_ENABLED=true` にすると、まずローカルルールで明らかな操作を判定します。判定できない場合は「ありがとう」「ただいま」「疲れた」などの小さな quick reply を即返答します。「前に話した」「覚えておいて」「調べて」のように OpenClaw が必要な語句は OpenClaw へ直行します。それ以外だけ軽量LLM router に聞き、許可済み action に高信頼で一致した場合だけ `ha-bridge` を直接呼びます。軽い雑談は `quick_reply` または `memory_chat` として direct LLM が返答し、OpenClaw の memory / skill / persona / 深い推論が必要なものは OpenClaw へ渡します。
 
 安全上、router が自由な Home Assistant service を呼ぶことはありません。実行できるのは `ha-bridge /actions` に出てくる許可済み action だけです。
 
@@ -193,7 +200,7 @@ curl -X POST http://127.0.0.1:18089/send-text \
   -d '{"text":"洗面所の電気をつけて"}'
 ```
 
-期待される応答は `route: "home_action"` です。雑談の場合は `route: "openclaw"` になり、OpenClaw 側で自然応答します。
+期待される応答は `route: "home_action"` です。軽い雑談の場合は `route: "quick_reply"` または `route: "memory_chat"`、OpenClaw が必要な入力は `route: "openclaw"` になります。
 
 ### 独自オーケストレーションの方針
 
