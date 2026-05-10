@@ -272,6 +272,56 @@ openclaw/.git.backup-before-monorepo/
 aituber-kit/.git.backup-before-monorepo/
 ```
 
+## 現在の作業ブランチ
+
+2026-05-10 時点の基準コミットは以下です。
+
+```text
+4555e6cc Prepare voice companion baseline
+```
+
+このコミットを起点に、現行の音声待受改善と OpenClaw Talk mode 検証を分けて進めます。
+
+| パス | ブランチ | 目的 |
+| --- | --- | --- |
+| `/Users/shin/work/V_agent` | `main` | 安定ベース。共通README、現行構成、共有済みの基準点 |
+| `/Users/shin/work/V_agent_voice-listener-metrics` | `experiment/voice-listener-metrics` | 現行 `voice-listener` の計測、遅延分析、録音/STT/VADのブラッシュアップ |
+| `/Users/shin/work/V_agent_openclaw-talk-mode` | `experiment/openclaw-talk-mode` | OpenClaw Talk mode、`talk.speak`、realtime/agent-consult 経路の検証 |
+
+作業前に、どの検証をするかでディレクトリを選びます。
+
+```bash
+cd /Users/shin/work/V_agent_voice-listener-metrics
+git status
+```
+
+```bash
+cd /Users/shin/work/V_agent_openclaw-talk-mode
+git status
+```
+
+差分確認:
+
+```bash
+cd /Users/shin/work/V_agent
+git diff main...experiment/voice-listener-metrics
+git diff main...experiment/openclaw-talk-mode
+```
+
+リモートにも以下の3ブランチを push 済みです。
+
+```text
+main
+experiment/voice-listener-metrics
+experiment/openclaw-talk-mode
+```
+
+注意:
+
+- `.env` と `.venv` は worktree ごとにはコピーしていません。
+- 実行検証するときは、必要な worktree にだけ `.env` や仮想環境を用意します。
+- 2つの実験ブランチを同時に混ぜず、良さそうな変更だけ `main` に取り込みます。
+
 ## 秘密情報
 
 `.env` ファイルは commit しないでください。

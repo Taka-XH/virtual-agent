@@ -19,6 +19,31 @@ cd /Users/shin/work/V_agent
 git status
 ```
 
+## Active Worktrees
+
+As of 2026-05-10, the shared baseline commit is:
+
+```text
+4555e6cc Prepare voice companion baseline
+```
+
+There are three local worktrees for keeping the next experiments separate:
+
+| Path | Branch | Purpose |
+| --- | --- | --- |
+| `/Users/shin/work/V_agent` | `main` | Stable baseline and shared docs |
+| `/Users/shin/work/V_agent_voice-listener-metrics` | `experiment/voice-listener-metrics` | Measure and improve the current `voice-listener` path |
+| `/Users/shin/work/V_agent_openclaw-talk-mode` | `experiment/openclaw-talk-mode` | Explore OpenClaw Talk mode, `talk.speak`, realtime, and `agent-consult` |
+
+Do not mix the two experiment tracks in one branch. Compare from the main worktree:
+
+```bash
+git diff main...experiment/voice-listener-metrics
+git diff main...experiment/openclaw-talk-mode
+```
+
+The three branches have been pushed to `origin`.
+
 ## Main Components
 
 - `openclaw/`: OpenClaw gateway plus local Docker services.
