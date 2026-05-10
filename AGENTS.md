@@ -133,6 +133,8 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - The orchestration fast path may call only action names returned by `ha-bridge /actions`; it must never construct arbitrary Home Assistant service calls.
 - Obvious home actions can go directly to `ha-bridge`. Casual talk, ambiguous input, and low-confidence classifications must still go to OpenClaw.
 - In the independent orchestration branch, keep `interaction-bridge` as the low-latency runtime. It may handle obvious home actions, lightweight replies, and memory-backed casual chat, but it should route requests that need OpenClaw memory, persona, skills, tools, or deeper reasoning back to OpenClaw.
+- Home Assistant MCP is registered in local OpenClaw config as `mcp.servers.home-assistant` by `scripts/local/setup-homeassistant-mcp.py`. Keep the HA token as an environment variable reference; do not write token values into Git-tracked files.
+- Home Assistant MCP requires the Home Assistant `Model Context Protocol Server` integration. If `/api/mcp` returns `404`, enable that integration and configure exposed entities before debugging OpenClaw.
 - A small deterministic `local_quick_reply` layer is allowed for very common low-risk phrases so the companion still feels responsive when the LLM router is unavailable.
 - A small deterministic `local_openclaw_required` layer should catch obvious memory/tool phrases before the LLM router, avoiding wasted router latency.
 - A small deterministic `local_memory_chat_requested` layer should catch recent-history phrases such as "さっき" or "今の流れ" before the LLM router.

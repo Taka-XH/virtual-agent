@@ -206,6 +206,28 @@ curl -X POST http://127.0.0.1:18089/send-text \
 
 期待される応答は `route: "home_action"` です。軽い雑談の場合は `route: "quick_reply"` または `route: "memory_chat"`、OpenClaw が必要な入力は `route: "openclaw"` になります。
 
+### Home Assistant MCP
+
+Home Assistant 側で「Model Context Protocol Server」統合を有効にすると、OpenClaw から Home Assistant の Assist API ベースの MCP tools を使えます。よく使う確定操作は引き続き `ha-bridge` fast path、曖昧な家電操作や `devices.yaml` に未登録の操作は OpenClaw + Home Assistant MCP に寄せる方針です。
+
+ローカル OpenClaw config に MCP server を登録するには、秘密情報を Git に入れずに次を実行します。
+
+```bash
+cd /Users/shin/work/V_agent_voice-listener-metrics
+python scripts/local/setup-homeassistant-mcp.py
+```
+
+登録される設定は `~/.openclaw/openclaw.json` の `mcp.servers.home-assistant` です。URL は `HOME_ASSISTANT_MCP_URL` があればそれを使い、なければ `HA_URL + /api/mcp` を使います。認証ヘッダーは `Bearer ${HA_TOKEN}` の環境変数参照にして、トークン値そのものは OpenClaw config に保存しません。
+
+Docker では `openclaw-gateway` に `HA_TOKEN` を渡しています。設定反映後は gateway を再起動してください。
+
+```bash
+cd /Users/shin/work/V_agent_voice-listener-metrics/openclaw
+docker compose up -d --no-deps openclaw-gateway
+```
+
+`/api/mcp` が `404` の場合は Home Assistant 側で MCP Server 統合が未設定です。Settings > Devices & services から `Model Context Protocol Server` を追加し、必要な exposed entities と「Control Home Assistant」を設定してください。
+
 ### 独自オーケストレーションの方針
 
 このブランチでは OpenClaw へ寄せる実験とは分けて、`interaction-bridge` を低遅延 runtime として育てます。ただし OpenClaw の memory、persona、skill、モデル設定を捨てるのではなく、入力ごとに使い分けます。
