@@ -500,16 +500,20 @@ def main():
 
     print("[init] starting microphone stream...")
     print(f"[init] device index: {MIC_DEVICE_INDEX}")
+    print(f"[init] sounddevice default device: {sd.default.device}")
     print(f"[init] mic gain: {MIC_GAIN}")
 
-    with sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=CHANNELS,
-        dtype="float32",
-        blocksize=WAKE_CHUNK_SAMPLES,
-        callback=audio_callback,
-        device=MIC_DEVICE_INDEX,
-    ):
+    stream_kwargs = {
+        "samplerate": SAMPLE_RATE,
+        "channels": CHANNELS,
+        "dtype": "float32",
+        "blocksize": WAKE_CHUNK_SAMPLES,
+        "callback": audio_callback,
+    }
+    if MIC_DEVICE_INDEX is not None:
+        stream_kwargs["device"] = MIC_DEVICE_INDEX
+
+    with sd.InputStream(**stream_kwargs):
         print("[ready] Wake Word待受中です。Ctrl+Cで終了します。")
 
         wake_candidate_name = ""
