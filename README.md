@@ -18,6 +18,8 @@
   -> ha-character-bridge WebSocket -> AITuber Kit -> VOICEVOX
 ```
 
+`experiment/aituberkit-browser-mic` ブランチでは、AITuber Kit のブラウザ音声認識で得たテキストを既存 WebSocket 経由で `interaction-bridge` に転送する実験を行います。
+
 ## ディレクトリ構成
 
 ```text
@@ -57,6 +59,7 @@ http://localhost:3000
 ### ha-character-bridge
 
 `interaction-bridge` から AITuber Kit へメッセージを送るための小さな WebSocket ブリッジです。
+`experiment/aituberkit-browser-mic` では逆方向も扱い、AITuber Kit が外部連携モードで送る `{ content, type: "chat" }` を `interaction-bridge /send-text` へ転送します。
 
 通常のURL:
 
@@ -152,6 +155,42 @@ http://127.0.0.1:18089
 5. カジュアルトークなら OpenClaw の応答を AITuber Kit へ発話
 6. 家電操作なら `ha-bridge` 経由で許可済みの Home Assistant 操作を実行
 7. `/speak` が呼ばれた場合は、その発話を優先して二重発話を避ける
+
+## AITuber Kit ブラウザマイク入力
+
+`experiment/aituberkit-browser-mic` では、AITuber Kit の画面上のマイク入力をそのまま OpenClaw への入力に使えます。AITuber Kit のブラウザ音声認識はテキスト化までを担当し、`ha-character-bridge` が WebSocket で受け取ったテキストを `interaction-bridge /send-text` に転送します。
+
+```text
+AITuber Kit ブラウザ音声認識
+  -> 外部連携 WebSocket ws://127.0.0.1:8000/ws
+  -> ha-character-bridge
+  -> interaction-bridge /send-text
+  -> OpenClaw / ha-bridge
+  -> interaction-bridge /speak
+  -> ha-character-bridge
+  -> AITuber Kit が発話
+```
+
+設定:
+
+```text
+AITuber Kit:
+  外部連携モード: ON
+  音声認識モード: ブラウザ
+  常時マイク入力: 必要に応じてON
+
+ha-character-bridge:
+  INTERACTION_BRIDGE_URL=http://127.0.0.1:18089
+```
+
+起動:
+
+```bash
+cd /Users/shin/work/V_agent_aituberkit-browser-mic/ha-character-bridge
+python3 bridge_server.py
+```
+
+この方式では Python の `voice-listener` がマイクを直接掴まないため、PortAudio のデバイス選択や入力音量問題を避けられます。wake word は使わず、AITuber Kit 側のマイクボタンまたは常時マイク入力で待ち受けます。
 
 ## 常時待受音声入力
 

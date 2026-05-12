@@ -4,12 +4,18 @@ import hashlib
 import json
 import os
 import signal
+import urllib.error
+import urllib.request
 from typing import Set
 
 
 HOST = os.getenv("HA_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.getenv("HA_BRIDGE_PORT", "8000"))
 PATH = os.getenv("HA_BRIDGE_PATH", "/ws")
+INTERACTION_BRIDGE_URL = os.getenv(
+    "INTERACTION_BRIDGE_URL",
+    "http://127.0.0.1:18089",
+).rstrip("/")
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 clients: Set[asyncio.StreamWriter] = set()
@@ -119,6 +125,60 @@ async def broadcast(message: str, sender: asyncio.StreamWriter) -> int:
     return delivered
 
 
+def extract_user_text(message: str) -> str | None:
+    try:
+        payload = json.loads(message)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    if payload.get("type") != "chat":
+        return None
+
+    content = payload.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+
+    text = payload.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+
+    return None
+
+
+def post_to_interaction_bridge(text: str) -> dict:
+    body = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        f"{INTERACTION_BRIDGE_URL}/send-text",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=90) as response:
+        raw = response.read().decode("utf-8")
+        return json.loads(raw) if raw else {}
+
+
+async def forward_user_text_to_interaction_bridge(text: str) -> None:
+    try:
+        result = await asyncio.to_thread(post_to_interaction_bridge, text)
+        print(
+            "forwarded user text to interaction-bridge: "
+            + json.dumps(
+                {
+                    "text": text,
+                    "status": result.get("status"),
+                    "route": result.get("route"),
+                },
+                ensure_ascii=False,
+            )
+        )
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        print(f"failed to forward user text to interaction-bridge: {exc}")
+
+
 async def handle_client(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
@@ -149,6 +209,10 @@ async def handle_client(
                 continue
 
             json.loads(message)
+            user_text = extract_user_text(message)
+            if user_text:
+                asyncio.create_task(forward_user_text_to_interaction_bridge(user_text))
+
             delivered = await broadcast(message, writer)
             print(f"broadcast to {delivered} client(s): {message}")
     except (asyncio.IncompleteReadError, ConnectionResetError):

@@ -27,22 +27,24 @@ As of 2026-05-10, the shared baseline commit is:
 4555e6cc Prepare voice companion baseline
 ```
 
-There are three local worktrees for keeping the next experiments separate:
+There are four local worktrees for keeping the next experiments separate:
 
 | Path | Branch | Purpose |
 | --- | --- | --- |
 | `/Users/shin/work/V_agent` | `main` | Stable baseline and shared docs |
 | `/Users/shin/work/V_agent_voice-listener-metrics` | `experiment/voice-listener-metrics` | Measure and improve the current `voice-listener` path |
 | `/Users/shin/work/V_agent_openclaw-talk-mode` | `experiment/openclaw-talk-mode` | Explore OpenClaw Talk mode, `talk.speak`, realtime, and `agent-consult` |
+| `/Users/shin/work/V_agent_aituberkit-browser-mic` | `experiment/aituberkit-browser-mic` | Use AITuber Kit browser speech recognition as the microphone input path |
 
-Do not mix the two experiment tracks in one branch. Compare from the main worktree:
+Do not mix experiment tracks in one branch. Compare from the main worktree:
 
 ```bash
 git diff main...experiment/voice-listener-metrics
 git diff main...experiment/openclaw-talk-mode
+git diff main...experiment/aituberkit-browser-mic
 ```
 
-The three branches have been pushed to `origin`.
+Experiment branches should be pushed to `origin` after each coherent checkpoint.
 
 ## Main Components
 
@@ -50,7 +52,7 @@ The three branches have been pushed to `origin`.
 - `openclaw/ha-bridge/`: approved Home Assistant action bridge.
 - `openclaw/interaction-bridge/`: browser voice/text bridge and AITuber speech endpoint.
 - `aituber-kit/`: character UI and speech frontend.
-- `ha-character-bridge/`: WebSocket bridge used by `interaction-bridge` to send messages to AITuber Kit.
+- `ha-character-bridge/`: WebSocket bridge used by `interaction-bridge` to send messages to AITuber Kit. In the AITuber Kit browser mic experiment, it also forwards AITuber Kit user chat payloads to `interaction-bridge /send-text`.
 - `voice-listener/`: local microphone wake-word listener that transcribes speech and sends text to `interaction-bridge`.
 
 ## Safety Rules
@@ -157,6 +159,7 @@ The `ha-bridge` response should include a `speak` field with `status: ok` when A
 - `interaction-bridge` sends raw STT/text to OpenClaw. OpenClaw should decide whether the input is casual talk or a home action.
 - After `chat.send`, `interaction-bridge` waits for the OpenClaw run and reads the latest assistant message. If `/speak` was not called during the run, it sends that assistant text to AITuber Kit. If `/speak` was already called, it skips auto-speech to avoid duplicate character speech.
 - `interaction-bridge` signs into OpenClaw as a paired device and requests operator scopes.
+- In `experiment/aituberkit-browser-mic`, AITuber Kit external linkage mode sends browser-recognized user text to `ha-character-bridge` as `{ content, type: "chat" }`; the bridge forwards that text to `INTERACTION_BRIDGE_URL/send-text`.
 - Docker services reach the host through `host.docker.internal`.
 - `voice-listener` uses `openwakeword` with the custom `Hey_Kemy` model at `voice-listener/models/Hey_Kemy.onnx` and OpenAI audio transcription. The current default STT model is `gpt-4o-transcribe`.
 - `voice-listener` must preserve unused audio samples between reads. Dropping the remainder from a larger microphone chunk corrupts recordings and hurts STT accuracy.
