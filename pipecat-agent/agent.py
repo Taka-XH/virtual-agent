@@ -66,12 +66,16 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 # --- Backend selection ---
-STT_BACKEND = os.getenv("STT_BACKEND", "deepgram").lower()   # deepgram | openai
-LLM_BACKEND = os.getenv("LLM_BACKEND", "openai").lower()    # openai | groq
+# bench_accuracy.py 結果: Deepgram 日本語CER=57-65% vs OpenAI CER=1.2%
+# → 日本語精度は OpenAI が大幅に優位。速度重視なら Deepgram だが要注意。
+STT_BACKEND = os.getenv("STT_BACKEND", "openai").lower()     # openai | deepgram
+LLM_BACKEND = os.getenv("LLM_BACKEND", "groq").lower()      # groq | openai
 
 # --- Model names ---
-STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-transcribe")      # OpenAI STT only
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+# bench_accuracy.py 結果: gpt-4o-mini と gpt-4o-transcribe は同精度 (CER=1.2%)
+STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe")  # OpenAI STT only
+# bench_accuracy.py 結果: gpt-4o-mini が gpt-4o を上回る (100% vs 67% HA精度)
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # --- Deepgram settings ---
@@ -99,6 +103,7 @@ MIC_DEVICE_INDEX: int | None = int(MIC_DEVICE_INDEX_RAW) if MIC_DEVICE_INDEX_RAW
 
 SYSTEM_PROMPT = """あなたは家のAIキャラクターです。ユーザーと日本語で自然な会話をしてください。
 家電操作を頼まれたら、利用可能なツールを使って実行してください。
+「電気つけて」「電気消して」のように場所が省略された場合は洗面所を指すと解釈して操作してください。
 返答は必ず1〜2文で簡潔にしてください。"""
 
 
