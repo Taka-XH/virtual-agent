@@ -2,10 +2,12 @@ import os
 
 import requests
 from loguru import logger
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
 HA_BRIDGE_URL = os.getenv("HA_BRIDGE_URL", "http://127.0.0.1:18088")
 
-# Claude / OpenAI function calling 用ツール定義
+# bench_accuracy.py など生の OpenAI API 呼び出し用 (list of dicts)
 HA_TOOL_DEFINITIONS = [
     {
         "type": "function",
@@ -31,6 +33,30 @@ HA_TOOL_DEFINITIONS = [
         },
     }
 ]
+
+
+# Pipecat 1.2.1 LLMContext 用 ToolsSchema
+HA_TOOLS_SCHEMA = ToolsSchema(
+    standard_tools=[
+        FunctionSchema(
+            name="run_ha_action",
+            description=(
+                "Home Assistant のデバイスを操作する。"
+                "利用可能なアクション: "
+                "bathroom_light_on (洗面所の照明をつける)、"
+                "bathroom_light_off (洗面所の照明を消す)"
+            ),
+            properties={
+                "action": {
+                    "type": "string",
+                    "description": "実行するアクション名",
+                    "enum": ["bathroom_light_on", "bathroom_light_off"],
+                }
+            },
+            required=["action"],
+        )
+    ]
+)
 
 
 def run_ha_action(action: str) -> str:

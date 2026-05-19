@@ -1,25 +1,25 @@
 """
-Pipecat-based voice AI agent for V_agent.  v2 — latency-optimized.
+Pipecat-based voice AI agent for V_agent.  v3 — Pipecat 1.2.1 対応.
 
 Target: wake word 後 → AITuber Kit 発話開始まで <800ms
 
 Pipeline:
-  LocalAudioTransport (mic + Silero VAD, stop_secs=0.2)
-    → WakeWordGate         (openWakeWord: "Hey Kemy")
+  LocalAudioTransport (mic)
+    → VADProcessor        (SileroVAD: start_secs=0.2, stop_secs=0.2)
+    → WakeWordGate        (openWakeWord: "Hey Kemy")
     → [STT]
-        deepgram (推奨): DeepgramSTTService  streaming ~250ms
-        openai  (fallback): OpenAISTTService batch    ~880ms
-    → context aggregator   (user turn, aggregation_timeout=0.3)
+        openai  (推奨): OpenAISTTService gpt-4o-mini-transcribe  CER=1.2%
+        deepgram(高速): DeepgramSTTService streaming ~250ms       CER=65%
+    → context aggregator   (user turn, user_turn_stop_timeout=0.3)
     → [LLM]
-        openai: OpenAILLMService  gpt-4o   TTFT ~640ms
-        groq:   GroqLLMService    llama-70b TTFT ~150ms (日本語品質は劣る)
+        groq:   GroqLLMService    llama-3.3-70b TTFT ~150ms  HA精度100%
+        openai: OpenAILLMService  gpt-4o-mini   TTFT ~640ms  HA精度100%
     → AITuberSink          (→ ha-character-bridge WS → AITuber Kit → VOICEVOX)
     → context aggregator   (assistant turn)
 
 推定 end-to-end:
-  deepgram + gpt-4o   : 0.05 + 0.25 + 0.64 ≈ 0.94s
-  deepgram + groq-70b : 0.05 + 0.25 + 0.15 ≈ 0.45s
-  openai   + gpt-4o   : 0.05 + 0.88 + 0.64 ≈ 1.57s (旧 pipecat 構成)
+  openai-stt + groq-70b: 0.88 + 0.15 ≈ 1.03s  (精度優先・推奨)
+  deepgram   + groq-70b: 0.25 + 0.15 ≈ 0.40s  (速度優先・日本語CER 65%注意)
 """
 
 import asyncio
@@ -34,10 +34,15 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.transports.local.audio import LocalAudioParams, LocalAudioTransport
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContext,
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
+from pipecat.processors.audio.vad_processor import VADProcessor
+from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
-from ha_tools import HA_TOOL_DEFINITIONS, run_ha_action
+from ha_tools import HA_TOOLS_SCHEMA, run_ha_action
 from processors.aituber_sink import AITuberSink
 from processors.wake_word_gate import WakeWordGate
 
@@ -115,7 +120,7 @@ SYSTEM_PROMPT = """あなたは家のAIキャラクターです。ユーザー�
 def _build_stt():
     """Return the configured STT service."""
     if STT_BACKEND == "deepgram":
-        from pipecat.services.deepgram import DeepgramSTTService  # noqa: PLC0415
+        from pipecat.services.deepgram.stt import DeepgramSTTService  # noqa: PLC0415
 
         logger.info(f"[stt] Deepgram streaming  model={DEEPGRAM_MODEL}  endpointing={DEEPGRAM_ENDPOINTING_MS}ms")
         return DeepgramSTTService(
@@ -131,29 +136,28 @@ def _build_stt():
             ),
         )
 
-    # fallback: OpenAI batch
-    from pipecat.services.openai import OpenAISTTService  # noqa: PLC0415
+    # default: OpenAI batch
+    from pipecat.services.openai.stt import OpenAISTTService  # noqa: PLC0415
 
     logger.info(f"[stt] OpenAI batch  model={STT_MODEL}")
     return OpenAISTTService(
         api_key=OPENAI_API_KEY,
-        model=STT_MODEL,
-        language="ja",
+        settings=OpenAISTTService.Settings(model=STT_MODEL, language="ja"),
     )
 
 
 def _build_llm():
     """Return the configured LLM service."""
     if LLM_BACKEND == "groq":
-        from pipecat.services.groq import GroqLLMService  # noqa: PLC0415
+        from pipecat.services.groq.llm import GroqLLMService  # noqa: PLC0415
 
         logger.info(f"[llm] Groq  model={GROQ_MODEL}")
         return GroqLLMService(
             api_key=GROQ_API_KEY,
-            model=GROQ_MODEL,
+            settings=GroqLLMService.Settings(model=GROQ_MODEL),
         )
 
-    from pipecat.services.openai import OpenAILLMService  # noqa: PLC0415
+    from pipecat.services.openai.llm import OpenAILLMService  # noqa: PLC0415
 
     logger.info(f"[llm] OpenAI  model={LLM_MODEL}")
     return OpenAILLMService(
@@ -181,22 +185,25 @@ async def main() -> None:
     if LLM_BACKEND == "openai" and not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY が .env に設定されていません (LLM_BACKEND=openai)")
 
-    # --- Transport: mic + Silero VAD ---
-    # stop_secs=0.2: 旧 voice-listener の END_SILENCE_SECONDS=0.9 から 0.7s 短縮
+    # --- Transport: mic input only (VAD is a separate pipeline processor in 1.2.1) ---
     transport = LocalAudioTransport(
-        params=LocalAudioParams(
+        params=LocalAudioTransportParams(
             audio_in_enabled=True,
+            audio_in_passthrough=True,
             audio_out_enabled=False,
-            vad_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(
-                params=VADParams(
-                    start_secs=VAD_START_SECS,
-                    stop_secs=VAD_STOP_SECS,
-                    confidence=VAD_CONFIDENCE,
-                )
-            ),
-            vad_audio_passthrough=True,
             input_device_index=MIC_DEVICE_INDEX,
+        )
+    )
+
+    # --- VAD processor (separate pipeline stage in Pipecat 1.2.1) ---
+    # stop_secs=0.2: 旧 voice-listener の END_SILENCE_SECONDS=0.9 から 0.7s 短縮
+    vad = VADProcessor(
+        vad_analyzer=SileroVADAnalyzer(
+            params=VADParams(
+                start_secs=VAD_START_SECS,
+                stop_secs=VAD_STOP_SECS,
+                confidence=VAD_CONFIDENCE,
+            )
         )
     )
 
@@ -204,17 +211,16 @@ async def main() -> None:
     stt = _build_stt()
     llm = _build_llm()
 
-    context = OpenAILLMContext(
+    context = LLMContext(
         messages=[{"role": "system", "content": SYSTEM_PROMPT}],
-        tools=HA_TOOL_DEFINITIONS,
+        tools=HA_TOOLS_SCHEMA,
     )
 
-    # aggregation_timeout=0.3: デフォルト 1.0s (Issue #1319) を 0.7s 短縮
-    try:
-        context_aggregator = llm.create_context_aggregator(context, aggregation_timeout=0.3)
-    except TypeError:
-        # 古いバージョンでは引数なし
-        context_aggregator = llm.create_context_aggregator(context)
+    # user_turn_stop_timeout=0.3: デフォルト 5.0s を 4.7s 短縮
+    context_pair = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(user_turn_stop_timeout=0.3),
+    )
 
     # --- HA function call handler ---
     async def handle_run_ha_action(
@@ -243,17 +249,16 @@ async def main() -> None:
     aituber_sink = AITuberSink(ws_url=HA_CHAR_BRIDGE_WS_URL)
 
     # --- Pipeline ---
-    # 割り込み (bot 発話中にユーザーが話し始めたとき) は Pipecat がデフォルトで処理する。
-    # UserStartedSpeakingFrame が来ると bot の生成をキャンセルし新しいターンを開始。
     pipeline = Pipeline(
         [
             transport.input(),
-            wake_gate,
+            vad,             # SileroVAD → VADUserStartedSpeakingFrame / VADUserStoppedSpeakingFrame
+            wake_gate,       # wake word gate (VAD frames pass through only after wake word)
             stt,
-            context_aggregator.user(),
+            context_pair.user(),
             llm,
             aituber_sink,
-            context_aggregator.assistant(),
+            context_pair.assistant(),
         ]
     )
 
@@ -264,7 +269,7 @@ async def main() -> None:
     est_llm = "~150ms TTFT" if LLM_BACKEND == "groq" else "~640ms TTFT"
 
     logger.info("=" * 64)
-    logger.info("Pipecat Voice Agent v2 — latency-optimized")
+    logger.info("Pipecat Voice Agent v3 — Pipecat 1.2.1")
     logger.info(f"  STT : {STT_BACKEND}  {est_stt}")
     logger.info(f"  LLM : {LLM_BACKEND}  {est_llm}")
     logger.info(f"  VAD : stop_secs={VAD_STOP_SECS}s  confidence={VAD_CONFIDENCE}")

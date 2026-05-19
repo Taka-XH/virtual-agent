@@ -15,8 +15,8 @@ from openwakeword.model import Model
 from pipecat.frames.frames import (
     AudioRawFrame,
     Frame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -134,7 +134,7 @@ class WakeWordGate(FrameProcessor):
             # Always pass audio so VAD / STT can process it
             await self.push_frame(frame, direction)
 
-        elif isinstance(frame, UserStartedSpeakingFrame):
+        elif isinstance(frame, VADUserStartedSpeakingFrame):
             if self._is_active():
                 logger.info("[wake] speech started — gate open")
                 self._speaking = True
@@ -142,7 +142,7 @@ class WakeWordGate(FrameProcessor):
             else:
                 logger.debug("[wake] speech detected but wake word not active — ignoring")
 
-        elif isinstance(frame, UserStoppedSpeakingFrame):
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
             if self._speaking:
                 logger.info("[wake] speech ended — resetting to wake-word-wait")
                 self._speaking = False
