@@ -23,6 +23,7 @@ Pipeline:
 """
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -41,6 +42,8 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
+
+from pipecat.services.llm_service import FunctionCallParams
 
 from ha_tools import HA_TOOLS_SCHEMA, run_ha_action
 from processors.aituber_sink import AITuberSink
@@ -107,8 +110,13 @@ MIC_DEVICE_INDEX_RAW = os.getenv("MIC_DEVICE_INDEX", "").strip()
 MIC_DEVICE_INDEX: int | None = int(MIC_DEVICE_INDEX_RAW) if MIC_DEVICE_INDEX_RAW else None
 
 SYSTEM_PROMPT = """あなたは家のAIキャラクターです。ユーザーと日本語で自然な会話をしてください。
-家電操作を頼まれたら、利用可能なツールを使って実行してください。
-「電気つけて」「電気消して」のように場所が省略された場合は洗面所を指すと解釈して操作してください。
+
+【家電操作のルール】
+- ユーザーが明示的に「電気つけて」「電気消して」などの操作を指示したときだけツールを使ってください。
+- 雑談・感情の話・質問への返答では、絶対にツールを呼び出さないでください。
+- 場所が省略された場合は洗面所を指すと解釈してください。
+- ツールがエラーになった場合は「うまくいきませんでした」と一度だけ伝え、再試行しないでください。
+
 返答は必ず1〜2文で簡潔にしてください。"""
 
 
@@ -138,11 +146,22 @@ def _build_stt():
 
     # default: OpenAI batch
     from pipecat.services.openai.stt import OpenAISTTService  # noqa: PLC0415
+    from pipecat.transcriptions.language import Language  # noqa: PLC0415
 
     logger.info(f"[stt] OpenAI batch  model={STT_MODEL}")
     return OpenAISTTService(
         api_key=OPENAI_API_KEY,
-        settings=OpenAISTTService.Settings(model=STT_MODEL, language="ja"),
+        settings=OpenAISTTService.Settings(
+            model=STT_MODEL,
+            language=Language.JA,
+            # Whisper prompt: provides vocabulary context so short words like
+            # 「元気」are not confused with phonetically similar words like「緊急」
+            prompt=(
+                "家のAIアシスタントとの日本語会話。"
+                "元気、電気、電気つけて、電気消して、洗面所、"
+                "ありがとう、おやすみ、おはよう、ただいま。"
+            ),
+        ),
     )
 
 
@@ -223,19 +242,26 @@ async def main() -> None:
     )
 
     # --- HA function call handler ---
-    async def handle_run_ha_action(
-        function_name: str,
-        tool_call_id: str,
-        arguments: dict,
-        llm,       # noqa: ARG001
-        context,   # noqa: ARG001
-        result_callback,
-    ) -> None:
-        action = arguments.get("action", "")
+    async def handle_run_ha_action(params: FunctionCallParams) -> None:
+        action = params.arguments.get("action", "")
         result = await asyncio.to_thread(run_ha_action, action)
-        await result_callback(result)
+        await params.result_callback(result)
 
     llm.register_function("run_ha_action", handle_run_ha_action)
+
+    # --- Wake word acknowledgment: "はい？" sent to AITuber when gate opens ---
+    async def _on_wake_activated() -> None:
+        try:
+            import websockets as _ws  # noqa: PLC0415
+            payload = json.dumps(
+                {"text": "はい？", "role": "assistant", "emotion": "neutral", "type": "talk"},
+                ensure_ascii=False,
+            )
+            async with _ws.connect(HA_CHAR_BRIDGE_WS_URL, open_timeout=3) as ws:
+                await ws.send(payload)
+            logger.info("[wake] ack sent → AITuber: はい？")
+        except Exception as e:
+            logger.debug(f"[wake] ack error: {e}")
 
     # --- Wake word gate ---
     wake_gate = WakeWordGate(
@@ -243,10 +269,11 @@ async def main() -> None:
         threshold=WAKE_THRESHOLD,
         confirm_chunks=WAKE_CONFIRM_CHUNKS,
         active_window=WAKE_ACTIVE_WINDOW,
+        on_activated=_on_wake_activated,
     )
 
-    # --- AITuber Kit output ---
-    aituber_sink = AITuberSink(ws_url=HA_CHAR_BRIDGE_WS_URL)
+    # --- AITuber Kit output (gate reference for echo suppression) ---
+    aituber_sink = AITuberSink(ws_url=HA_CHAR_BRIDGE_WS_URL, gate=wake_gate)
 
     # --- Pipeline ---
     pipeline = Pipeline(

@@ -38,14 +38,14 @@ cp .env.example .env
 
 ## 起動
 
-以下を先に起動しておく:
+### 一括起動 (推奨)
 
-1. AITuber Kit: `cd aituber-kit && npm run dev`
-2. ha-character-bridge: `cd ha-character-bridge && .venv/bin/python bridge_server.py`
-3. VOICEVOX
-4. ha-bridge (HA 操作が必要な場合): `cd openclaw && docker compose up -d ha-bridge`
+```bash
+cd /Users/shin/work/V_agent
+./start.sh   # VOICEVOX は事前に起動しておく
+```
 
-pipecat-agent を起動:
+### 単体起動 (デバッグ用)
 
 ```bash
 cd /Users/shin/work/V_agent/pipecat-agent
@@ -230,3 +230,56 @@ Deepgram STT を使えば 510ms で達成できるが、後述の日本語精度
 
 `ha_tools.py` の `HA_TOOL_DEFINITIONS` の `enum` と、
 `openclaw/ha-bridge/devices.yaml` の両方に追記してください。
+
+---
+
+## v3 改善履歴 (2026-05)
+
+### WakeWordGate の改善
+
+| 問題 | 原因 | 修正 |
+|---|---|---|
+| ウェイクワード音声が STT に渡っていた | `_pending_started_frame` のリプレイ機構がウェイクワード中の音声を STT に流していた | ゲート開放時にペンディングフレームを破棄するよう変更 |
+| ゲートが開いても無反応でユーザーが繰り返す | 開放フィードバックなし | ゲート開放時に「はい？」を AITuber Kit に即時送信 |
+| AIのスピーカー音をマイクが拾ってエコーループ | VOICEVOX発話中もマイクが有効 | AI応答送信後に `suppress_mic(N秒)` でマイク抑制 |
+| 2問目以降にウェイクワードが毎回必要 | `active_window` (8秒) が発話+応答で使い切れる | AI応答後に `extend_gate()` でウィンドウをリセット |
+| 短い言葉が誤認識される (元気→緊急 等) | Whisper に文脈がない | `prompt=` に日常語彙ヒントを渡すよう修正 |
+
+### AITuberSink の改善
+
+**文単位ストリーミング** — LLM応答の全文が揃うまで待たずに、`。！？` が来た時点で即座に送信。
+
+```
+変更前: LLM生成完了 (0.5〜1s) → まとめて送信 → VOICEVOX開始
+変更後: 第1文の句点が来た瞬間に送信 → VOICEVOX開始 (0.5〜1s 短縮)
+```
+
+複数文は内部 asyncio.Queue で順番通りに送信されるため、再生順は保証されます。
+
+**マイク抑制タイミングの精度改善** — 第1文を送信した時刻を記録し、LLM応答完了時点での経過時間を引いた残り再生時間だけ抑制。
+
+```
+変更前: 全文字数 / 6 + 2s (再生済み分も二重カウント)
+変更後: max(2s, 全再生時間 - 第1文送信からの経過時間)
+```
+
+### ha-bridge のローカル起動対応
+
+`openclaw/ha-bridge/main.py` の `/app/devices.yaml` (Docker専用パス) を `Path(__file__).parent / "devices.yaml"` に変更。
+`start.sh` が初回実行時に自動で venv を作成し、`openclaw/ha-bridge/.env` の認証情報を読み込んでポート 18088 で起動します。
+
+### 一括起動スクリプト
+
+| スクリプト | 役割 |
+|---|---|
+| `start.sh` | VOICEVOX確認 → bridge → ha-bridge → AITuber Kit → Agent を順番に起動 |
+| `stop.sh` | 全サービスを PID ファイルで管理して停止 |
+| `status.sh` | 各サービスの稼働状況を表示 |
+
+### システムプロンプトの改善
+
+LLMが不要な家電操作ツールを呼び出す問題に対して:
+
+- 雑談・感情の話では絶対にツールを呼び出さないよう明示
+- ツールがエラーになった場合は1回だけ報告して再試行しないよう明示
+- 返答は1〜2文で簡潔にするよう指示

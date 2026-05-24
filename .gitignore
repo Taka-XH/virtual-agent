@@ -23,6 +23,8 @@ __pycache__/
 
 # Logs and runtime files
 *.log
+.logs/
+.pids/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

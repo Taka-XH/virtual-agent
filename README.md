@@ -22,14 +22,18 @@
 
 ```text
 .
+├── pipecat-agent/          ← メイン音声エージェント (Pipecat 1.2.1)
 ├── openclaw/
 │   ├── docker-compose.yml
 │   ├── docker-compose.override.yml
-│   ├── ha-bridge/
+│   ├── ha-bridge/          ← HA REST ブリッジ (ローカル起動)
 │   └── interaction-bridge/
 ├── aituber-kit/
 ├── ha-character-bridge/
-├── voice-listener/
+├── voice-listener/         ← 旧システム (pipecat-agent に移行済み)
+├── start.sh                ← 全サービス一括起動
+├── stop.sh                 ← 全サービス一括停止
+├── status.sh               ← サービス状態確認
 ├── README.md
 └── AGENTS.md
 ```
@@ -88,51 +92,57 @@ ws://127.0.0.1:8000/ws
 
 ## 起動方法
 
-### 1. AITuber Kit を起動
+### 一括起動 (推奨)
+
+VOICEVOX アプリを先に起動してから:
 
 ```bash
-cd /Users/shin/work/V_agent/aituber-kit
-npm run dev
+cd /Users/shin/work/V_agent
+./start.sh
 ```
 
-ブラウザで開きます。
+以下のサービスが自動で起動します:
 
-```text
-http://localhost:3000
-```
+| サービス | URL |
+|---|---|
+| ha-character-bridge | `ws://127.0.0.1:8000/ws` |
+| ha-bridge (HA REST) | `http://127.0.0.1:18088` |
+| AITuber Kit | `http://localhost:3000` |
+| Pipecat Voice Agent | (ローカルプロセス) |
 
-### 2. キャラクター用 WebSocket ブリッジを起動
+停止:
 
 ```bash
-cd /Users/shin/work/V_agent/ha-character-bridge
-.venv/bin/python bridge_server.py
-```
-
-### 3. VOICEVOX を起動
-
-VOICEVOX アプリなどを起動し、以下でアクセスできる状態にします。
-
-```text
-http://127.0.0.1:50021
-```
-
-Docker コンテナ内からは以下のURLでアクセスします。
-
-```text
-http://host.docker.internal:50021
-```
-
-### 4. OpenClaw 関連サービスを起動
-
-```bash
-cd /Users/shin/work/V_agent/openclaw
-docker compose up -d openclaw-gateway ha-bridge interaction-bridge
+./stop.sh
 ```
 
 状態確認:
 
 ```bash
-docker compose ps
+./status.sh
+```
+
+### 手動起動 (個別デバッグ用)
+
+```bash
+# 1. VOICEVOX アプリを起動
+
+# 2. ha-character-bridge
+cd /Users/shin/work/V_agent/ha-character-bridge
+.venv/bin/python bridge_server.py
+
+# 3. ha-bridge (HA 操作が必要な場合)
+cd /Users/shin/work/V_agent/openclaw/ha-bridge
+HA_URL=<your-ha-url> HA_TOKEN=<your-token> \
+  .venv/bin/uvicorn main:app --host 127.0.0.1 --port 18088
+
+# 4. AITuber Kit
+cd /Users/shin/work/V_agent/aituber-kit
+npm run dev
+
+# 5. Pipecat Voice Agent
+cd /Users/shin/work/V_agent/pipecat-agent
+.venv/bin/python agent.py
 ```
 
 ## ブラウザ音声入力

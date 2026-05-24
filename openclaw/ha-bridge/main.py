@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Any, Dict
 
 import requests
@@ -24,8 +25,11 @@ HEADERS = {
 app = FastAPI(title="Home Assistant Bridge")
 
 
+_DEVICES_YAML = Path(__file__).parent / "devices.yaml"
+
+
 def load_actions() -> Dict[str, Any]:
-    with open("/app/devices.yaml", "r", encoding="utf-8") as f:
+    with open(_DEVICES_YAML, "r", encoding="utf-8") as f:
         return yaml.safe_load(f).get("actions", {})
 
 
